@@ -252,7 +252,7 @@ fun SearchScreen(
                             onExpandedChange = {},
                             placeholder = {
                                 Text(
-                                    "Search...",
+                                    "本地和 GD音乐台",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -743,6 +743,7 @@ fun SearchResultsList(
                                     isPlaying = isPlaying,
                                     isCurrentSong = currentPlayingSongId == item.song.id,
                                     onMoreOptionsClick = onSongMoreOptionsClick,
+                                    onDownloadQuality = playerViewModel::downloadSong,
                                     onClick = { onSongResultClick(item.song) }
                                 )
                             }

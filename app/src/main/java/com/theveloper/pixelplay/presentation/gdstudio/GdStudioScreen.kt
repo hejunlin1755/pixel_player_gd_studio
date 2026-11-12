@@ -1,6 +1,6 @@
 package com.theveloper.pixelplay.presentation.gdstudio
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +27,8 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -39,9 +41,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -169,6 +175,9 @@ fun GdStudioScreen(
                     song = song,
                     onClick = {
                         playerViewModel.playSongs(state.songs, song, "GD音乐台")
+                    },
+                    onDownloadQuality = { quality ->
+                        playerViewModel.downloadSong(song, quality)
                     }
                 )
             }
@@ -199,12 +208,22 @@ fun GdStudioScreen(
 }
 
 @Composable
-private fun GdStudioSongRow(song: Song, onClick: () -> Unit) {
+private fun GdStudioSongRow(
+    song: Song,
+    onClick: () -> Unit,
+    onDownloadQuality: (String) -> Unit
+) {
+    var showDownloadMenu by remember(song.id) { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .pointerInput(song.id) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { showDownloadMenu = true }
+                )
+            }
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -239,6 +258,20 @@ private fun GdStudioSongRow(song: Song, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        DropdownMenu(
+            expanded = showDownloadMenu,
+            onDismissRequest = { showDownloadMenu = false }
+        ) {
+            GdStudioApi.qualities.forEach { quality ->
+                DropdownMenuItem(
+                    text = { Text(quality) },
+                    onClick = {
+                        showDownloadMenu = false
+                        onDownloadQuality(quality)
+                    }
+                )
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+import com.theveloper.pixelplay.presentation.navigation.navigateToTopLevelSafely
 
 import android.content.Intent
 import androidx.activity.compose.ReportDrawnWhen
@@ -98,6 +99,7 @@ import com.theveloper.pixelplay.presentation.viewmodel.SettingsViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StatsViewModel
 import com.theveloper.pixelplay.ui.theme.ExpTitleTypography
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -438,7 +440,11 @@ fun HomeScreen(
                 navController.navigateSafely(Screen.NavidromeDashboard.route)
             },
             onNavigateToGdStudio = {
-                navController.navigateSafely(Screen.GdStudio.route)
+                navController.navigateToTopLevelSafely(Screen.Search.route)
+                scope.launch {
+                    delay(180)
+                    playerViewModel.onSearchNavIconDoubleTapped()
+                }
             }
         )
     }

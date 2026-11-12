@@ -3116,6 +3116,10 @@ class PlayerViewModel @Inject constructor(
 
     fun downloadCurrentSong(quality: String) {
         val song = playbackStateHolder.stablePlayerState.value.currentSong ?: return
+        downloadSong(song, quality)
+    }
+
+    fun downloadSong(song: Song, quality: String) {
         if (!song.contentUriString.startsWith("gdstudio:")) return
         viewModelScope.launch {
             _toastEvents.emit("正在下载")
@@ -3128,7 +3132,8 @@ class PlayerViewModel @Inject constructor(
                 return@launch
             }
             playbackStateHolder.updateStablePlayerState { state ->
-                if (state.currentSong?.contentUriString?.startsWith("gdstudio:") == true) {
+                val current = state.currentSong
+                if (current != null && (current.id == song.id || current.contentUriString == song.contentUriString)) {
                     state.copy(currentSong = saved)
                 } else {
                     state

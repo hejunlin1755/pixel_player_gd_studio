@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -36,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.theveloper.pixelplay.data.gdstudio.GdStudioApi
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,6 +91,7 @@ fun EnhancedSongListItem(
     isSelectionMode: Boolean = false,
     showMoreOptionsButton: Boolean = true,
     onLongPress: () -> Unit = {},
+    onDownloadQuality: ((Song, String) -> Unit)? = null,
     onMoreOptionsClick: (Song) -> Unit,
     onClick: () -> Unit
 ) {
@@ -229,6 +233,8 @@ fun EnhancedSongListItem(
     } else {
         // Actual Song Item Layout
         var applyTextMarquee by remember { mutableStateOf(false) }
+        var showDownloadMenu by remember(song.id) { mutableStateOf(false) }
+        val canDownload = onDownloadQuality != null && song.contentUriString.startsWith("gdstudio:")
 
         Surface(
             modifier = modifier
@@ -246,7 +252,7 @@ fun EnhancedSongListItem(
                         Modifier
                     }
                 )
-                .pointerInput(isSelectionMode) {
+                .pointerInput(isSelectionMode, song.id, canDownload) {
                     detectTapGestures(
                         onTap = { 
                             if (isSelectionMode) {
@@ -257,8 +263,7 @@ fun EnhancedSongListItem(
                             }
                         },
                         onLongPress = { 
-                            // Long press always activates/toggles selection
-                            onLongPress()
+                            if (canDownload) showDownloadMenu = true else onLongPress()
                         },
                         onPress = {
                             if (!isSelectionMode) {
@@ -377,6 +382,20 @@ fun EnhancedSongListItem(
                     Spacer(modifier = Modifier.width(12.dp))
                 }
 
+                DropdownMenu(
+                    expanded = showDownloadMenu,
+                    onDismissRequest = { showDownloadMenu = false }
+                ) {
+                    GdStudioApi.qualities.forEach { quality ->
+                        DropdownMenuItem(
+                            text = { Text(quality) },
+                            onClick = {
+                                showDownloadMenu = false
+                                onDownloadQuality?.invoke(song, quality)
+                            }
+                        )
+                    }
+                }
                 if (showTrailingAction) {
                     FilledIconButton(
                         onClick = { onMoreOptionsClick(song) },
