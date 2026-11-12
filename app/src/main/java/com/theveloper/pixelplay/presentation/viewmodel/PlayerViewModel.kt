@@ -1875,10 +1875,7 @@ class PlayerViewModel @Inject constructor(
         isVoluntaryPlay: Boolean = true,
         cancelPendingQueueBuild: Boolean = true
     ) {
-        if (song.contentUriString.startsWith("gdstudio:")) {
-            val cached = song.path.takeIf { it.startsWith("/") }?.let { path -> java.io.File(path) }
-            val cacheReady = cached != null && cached.isFile && cached.length() > 0L
-            if (!cacheReady) {
+        if (song.contentUriString.startsWith("gdstudio:") && !isGdCached(song)) {
                 viewModelScope.launch {
                     _toastEvents.emit("正在缓存")
                     val ready = try {
@@ -1900,7 +1897,6 @@ class PlayerViewModel @Inject constructor(
                     )
                 }
                 return
-            }
         }
         if (cancelPendingQueueBuild) {
             cancelPendingFullQueuePlayback()
@@ -1990,6 +1986,13 @@ class PlayerViewModel @Inject constructor(
             }
         }
         resetPredictiveBackState()
+    }
+
+    private fun isGdCached(song: Song): Boolean {
+        val path = song.path
+        if (!path.startsWith("/")) return false
+        val file = java.io.File(path)
+        return file.isFile && file.length() > 0L
     }
 
     fun showAndPlaySong(song: Song) {
@@ -2697,7 +2700,7 @@ class PlayerViewModel @Inject constructor(
 
     // rebuildPlayerQueue functionality moved to PlaybackStateHolder (simplified)
     fun playSongs(songsToPlay: List<Song>, startSong: Song, queueName: String = "None", playlistId: String? = null) {
-        if (startSong.contentUriString.startsWith("gdstudio:")) {
+        if (startSong.contentUriString.startsWith("gdstudio:") && !isGdCached(startSong)) {
             showAndPlaySong(startSong, songsToPlay, queueName)
             return
         }
