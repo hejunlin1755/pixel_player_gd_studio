@@ -682,7 +682,7 @@ fun SearchResultsList(
     )
 
     val imePadding = WindowInsets.ime.getBottom(localDensity).dp
-    val systemBarPaddingBottom = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding() + 94.dp
+    val systemBarPaddingBottom = WindowInsets.systemBars.asPaddingValues().calculateBottomPadding() + 180.dp
 
     LazyColumn(
         modifier = Modifier
