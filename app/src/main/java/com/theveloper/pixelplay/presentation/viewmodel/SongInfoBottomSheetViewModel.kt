@@ -188,6 +188,7 @@ class SongInfoBottomSheetViewModel @Inject constructor(
             contentUriString.startsWith("qqmusic://") -> "QQ Music"
             contentUriString.startsWith("navidrome://") -> "Navidrome"
             contentUriString.startsWith("gdrive://") -> "Google Drive"
+            contentUriString.startsWith("gdstudio:") -> "GD音乐台"
             else -> null
         }
     }

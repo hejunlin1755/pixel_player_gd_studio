@@ -5,6 +5,7 @@ import com.google.common.truth.Truth.assertThat
 import com.theveloper.pixelplay.data.database.LyricsDao
 import com.theveloper.pixelplay.data.model.LyricsSourcePreference
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.gdstudio.GdStudioRepository
 import com.theveloper.pixelplay.data.network.lyrics.LrcLibApiService
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -19,7 +20,8 @@ class LyricsRepositoryImplTest {
             context = mockk<Context>(relaxed = true),
             lrcLibApiService = mockk<LrcLibApiService>(relaxed = true),
             lyricsDao = mockk<LyricsDao>(relaxed = true),
-            okHttpClient = mockk<OkHttpClient>(relaxed = true)
+            okHttpClient = mockk<OkHttpClient>(relaxed = true),
+            gdStudioRepository = mockk<GdStudioRepository>(relaxed = true)
         )
         val song = Song(
             id = "12",

@@ -37,7 +37,8 @@ object LocalArtworkUri {
             !normalized.startsWith("netease://") &&
             !normalized.startsWith("qqmusic://") &&
             !normalized.startsWith("navidrome://") &&
-            !normalized.startsWith("gdrive://")
+            !normalized.startsWith("gdrive://") &&
+            !normalized.startsWith("gdstudio:")
     }
 
     fun resolveSongArtworkUri(

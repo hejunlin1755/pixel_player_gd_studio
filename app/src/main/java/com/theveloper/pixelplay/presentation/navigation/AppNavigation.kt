@@ -576,6 +576,20 @@ fun AppNavigation(
                     )
                 }
             }
+            composable(
+                Screen.GdStudio.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    com.theveloper.pixelplay.presentation.gdstudio.GdStudioScreen(
+                        playerViewModel = playerViewModel,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
         }
     }
 }

@@ -49,6 +49,7 @@ fun StreamingProviderSheet(
     onNavigateToQqMusicDashboard: () -> Unit = {},
     isNavidromeLoggedIn: Boolean = false,
     onNavigateToNavidromeDashboard: () -> Unit = {},
+    onNavigateToGdStudio: () -> Unit = {},
     sheetState: SheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true
     )
@@ -126,6 +127,22 @@ fun StreamingProviderSheet(
             )
 
             Spacer(Modifier.height(24.dp))
+
+            ProviderCard(
+                icon = Icons.Rounded.MusicNote,
+                title = "GD音乐台",
+                subtitle = "在线搜索 · 仅供学习",
+                containerColor = if (isDark) Color(0xFF12342F) else Color(0xFFD7F4EE),
+                contentColor = if (isDark) Color(0xFF7DDFD0) else Color(0xFF0F6E62),
+                iconColor = if (isDark) Color(0xFF7DDFD0) else Color(0xFF0F6E62),
+                shape = cardShape,
+                onClick = {
+                    onNavigateToGdStudio()
+                    onDismissRequest()
+                }
+            )
+
+            Spacer(Modifier.height(12.dp))
 
             // Telegram Provider
             ProviderCard(

@@ -10,6 +10,8 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.core.graphics.get
 import androidx.core.net.toUri
 import com.theveloper.pixelplay.data.gdrive.GDriveStreamProxy
+import com.theveloper.pixelplay.data.gdstudio.GdStudioApi
+import com.theveloper.pixelplay.data.gdstudio.GdStudioRepository
 import com.google.android.gms.wearable.Wearable
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.navidrome.NavidromeStreamProxy
@@ -65,6 +67,7 @@ class PhoneDirectWatchTransferCoordinator @Inject constructor(
     private val qqMusicStreamProxy: QqMusicStreamProxy,
     private val navidromeStreamProxy: NavidromeStreamProxy,
     private val gDriveStreamProxy: GDriveStreamProxy,
+    private val gdStudioRepository: GdStudioRepository,
     private val okHttpClient: OkHttpClient,
 ) {
     private val contentResolver by lazy { application.contentResolver }
@@ -405,6 +408,10 @@ class PhoneDirectWatchTransferCoordinator @Inject constructor(
                 ensureCloudProxyReady(navidromeStreamProxy) || return null
                 navidromeStreamProxy.warmUpStreamUrl(rawUri)
                 navidromeStreamProxy.resolveNavidromeUri(rawUri)
+            }
+            "gdstudio" -> {
+                val ref = GdStudioApi.parseTrackUri(rawUri) ?: return null
+                gdStudioRepository.streamUrl(ref.source, ref.trackId, ref.br)
             }
             "gdrive" -> {
                 ensureGDriveProxyReady() || return null

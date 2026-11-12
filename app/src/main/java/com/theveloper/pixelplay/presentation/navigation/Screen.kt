@@ -53,5 +53,6 @@ sealed class Screen(val route: String) {
     object NeteaseDashboard : Screen("netease_dashboard")
     object QqMusicDashboard : Screen("qqmusic_dashboard")
     object NavidromeDashboard : Screen("navidrome_dashboard")
+    object GdStudio : Screen("gd_studio")
 
 }

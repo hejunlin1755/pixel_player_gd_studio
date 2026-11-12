@@ -436,6 +436,9 @@ fun HomeScreen(
             isNavidromeLoggedIn = isNavidromeLoggedIn,
             onNavigateToNavidromeDashboard = {
                 navController.navigateSafely(Screen.NavidromeDashboard.route)
+            },
+            onNavigateToGdStudio = {
+                navController.navigateSafely(Screen.GdStudio.route)
             }
         )
     }

@@ -16,6 +16,8 @@ import com.theveloper.pixelplay.data.model.Lyrics
 import com.theveloper.pixelplay.data.model.SyncedLine
 import com.theveloper.pixelplay.data.model.LyricsSourcePreference
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.gdstudio.GdStudioApi
+import com.theveloper.pixelplay.data.gdstudio.GdStudioRepository
 import com.theveloper.pixelplay.data.network.lyrics.LrcLibApiService
 import com.theveloper.pixelplay.data.network.lyrics.LrcLibResponse
 import com.theveloper.pixelplay.utils.LyricsImportSecurity
@@ -82,7 +84,8 @@ class LyricsRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val lrcLibApiService: LrcLibApiService,
     private val lyricsDao: com.theveloper.pixelplay.data.database.LyricsDao,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val gdStudioRepository: GdStudioRepository
 ) : LyricsRepository {
 
 
@@ -326,6 +329,14 @@ class LyricsRepositoryImpl @Inject constructor(
      * Fetches lyrics from LRCLIB API with rate limiting (matching Rhythm)
      */
     private suspend fun fetchLyricsFromAPI(song: Song): Lyrics? = withContext(Dispatchers.IO) {
+        GdStudioApi.parseTrackUri(song.contentUriString)?.let { ref ->
+            val raw = gdStudioRepository.lyrics(ref.source, ref.lyricId)
+            if (!raw.isNullOrBlank()) {
+                val parsed = LyricsUtils.parseLyrics(raw).copy(areFromRemote = true)
+                if (parsed.isValid()) return@withContext parsed
+            }
+        }
+
         val isNetease = isNeteaseSong(song)
 
         if (isNetease) {
@@ -788,6 +799,10 @@ class LyricsRepositoryImpl @Inject constructor(
                 }
             }
 
+        if (song.contentUriString.startsWith("gdstudio:")) {
+            return@withContext null
+        }
+
         // First check database for persisted lyrics (was user-imported or cached)
         val persisted = lyricsDao.getLyrics(song.id.toLong())
         if (persisted != null && !persisted.content.isBlank()) {
@@ -799,7 +814,10 @@ class LyricsRepositoryImpl @Inject constructor(
         }
         
         // Skip embedded lyrics for Telegram songs (not supported yet/streamed)
-        if (song.contentUriString.startsWith("telegram://") || song.contentUriString.isEmpty()) {
+        if (song.contentUriString.startsWith("telegram://") ||
+            song.contentUriString.startsWith("gdstudio:") ||
+            song.contentUriString.isEmpty()
+        ) {
             return@withContext null
         }
 
