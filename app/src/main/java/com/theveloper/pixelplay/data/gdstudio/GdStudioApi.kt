@@ -33,6 +33,7 @@ object GdStudioApi {
             .appendQueryParameter("br", normalizeQuality(br))
             .build()
             .toString()
+        // Extra query keys such as pic are ignored by playback and kept for download.
     }
 
     fun parseTrackUri(raw: String): TrackRef? {

@@ -64,6 +64,7 @@ import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
 import com.theveloper.pixelplay.data.preferences.ThemePreference
 import com.theveloper.pixelplay.data.repository.LyricsSearchResult
+import com.theveloper.pixelplay.data.gdstudio.GdStudioLibrary
 import com.theveloper.pixelplay.data.repository.MusicRepository
 import com.theveloper.pixelplay.data.service.MusicNotificationProvider
 import com.theveloper.pixelplay.data.service.MusicService
@@ -185,6 +186,7 @@ class PlayerViewModel @Inject constructor(
     private val connectivityStateHolder: ConnectivityStateHolder,
     private val sleepTimerStateHolder: SleepTimerStateHolder,
     private val searchStateHolder: SearchStateHolder,
+    private val gdStudioLibrary: GdStudioLibrary,
     private val aiStateHolder: AiStateHolder,
     private val libraryStateHolder: LibraryStateHolder,
     private val folderNavigationStateHolder: FolderNavigationStateHolder,
@@ -1873,6 +1875,25 @@ class PlayerViewModel @Inject constructor(
         isVoluntaryPlay: Boolean = true,
         cancelPendingQueueBuild: Boolean = true
     ) {
+        if (song.contentUriString.startsWith("gdstudio:")) {
+            viewModelScope.launch {
+                _toastEvents.emit("正在下载到本地")
+                val localSong = try {
+                    gdStudioLibrary.ensureLocal(song)
+                } catch (error: Exception) {
+                    _toastEvents.emit(error.message ?: "下载失败")
+                    return@launch
+                }
+                showAndPlaySong(
+                    song = localSong,
+                    contextSongs = contextSongs.map { if (it.id == song.id) localSong else it },
+                    queueName = queueName,
+                    isVoluntaryPlay = isVoluntaryPlay,
+                    cancelPendingQueueBuild = cancelPendingQueueBuild
+                )
+            }
+            return
+        }
         if (cancelPendingQueueBuild) {
             cancelPendingFullQueuePlayback()
         }

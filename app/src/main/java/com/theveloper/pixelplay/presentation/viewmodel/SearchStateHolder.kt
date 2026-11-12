@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.presentation.viewmodel
 
 import android.util.Log
+import com.theveloper.pixelplay.data.gdstudio.GdStudioLibrary
 import com.theveloper.pixelplay.data.model.SearchFilterType
 import com.theveloper.pixelplay.data.model.SearchHistoryItem
 import com.theveloper.pixelplay.data.model.SearchResultItem
@@ -36,7 +37,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class SearchStateHolder @Inject constructor(
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val gdStudioLibrary: GdStudioLibrary
 ) {
     private companion object {
         const val SEARCH_DEBOUNCE_MS = 300L
@@ -92,7 +94,19 @@ class SearchStateHolder @Inject constructor(
                     try {
                         val currentFilter = _selectedSearchFilter.value
                         val resultsList = withContext(Dispatchers.IO) {
-                            musicRepository.searchAll(normalizedQuery, currentFilter).first()
+                            val local = musicRepository.searchAll(normalizedQuery, currentFilter).first()
+                            if (currentFilter != SearchFilterType.ALL && currentFilter != SearchFilterType.SONGS) {
+                                return@withContext local
+                            }
+                            val online = runCatching { gdStudioLibrary.search(normalizedQuery) }
+                                .getOrDefault(emptyList())
+                            if (online.isEmpty()) return@withContext local
+                            val seen = local.mapNotNull { item ->
+                                (item as? SearchResultItem.SongItem)?.song?.id
+                            }.toSet()
+                            local + online
+                                .filter { it.id !in seen }
+                                .map { SearchResultItem.SongItem(it) }
                         }
 
                         if (request.requestId != latestSearchRequestId.get()) {

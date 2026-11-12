@@ -17,17 +17,33 @@
 </p>
 
 <p align="center">
-    <a href="https://github.com/theovilardo/PixelPlayer/releases/latest">
-        <img src="https://img.shields.io/github/v/release/theovilardo/PixelPlayer?include_prereleases&logo=github&style=for-the-badge&label=Latest%20Release" alt="Latest Release">
+    <a href="https://github.com/hejunlin1755/pixel_player_gd_studio/releases/latest">
+        <img src="https://img.shields.io/github/v/release/hejunlin1755/pixel_player_gd_studio?include_prereleases&logo=github&style=for-the-badge&label=Latest%20Release" alt="Latest Release">
     </a>
-    <a href="https://github.com/theovilardo/PixelPlayer/releases">
-        <img src="https://img.shields.io/github/downloads/theovilardo/PixelPlayer/total?logo=github&style=for-the-badge" alt="Total Downloads">
+    <a href="https://github.com/hejunlin1755/pixel_player_gd_studio/releases">
+        <img src="https://img.shields.io/github/downloads/hejunlin1755/pixel_player_gd_studio/total?logo=github&style=for-the-badge" alt="Total Downloads">
     </a>
     <img src="https://img.shields.io/badge/Android-10%2B-green?style=for-the-badge&logo=android" alt="Android 11+">
     <img src="https://img.shields.io/badge/Kotlin-100%25-purple?style=for-the-badge&logo=kotlin" alt="Kotlin">
 </p>
 
 ---
+
+## 说明
+
+播放器原有能力都保留。GD 音乐台接在原来的搜索框里：搜索时会同时查出在线曲目，点一首会下载到本机，并自动保存歌词和封面，之后按本地歌曲播放。
+
+当前在线源：netease、joox、bilibili。出处：GD音乐台(music.gdstudio.xyz)。
+
+## 免责声明
+
+以下文字来自 GD 音乐台页面，写在这里供使用本项目时知悉：
+
+- To report any unlawful activity or to protect your local authority, please contact: gdstudio@email.com
+- Written by GD Studio. License: CC BY-NC 4.0
+- This platform is for study purposes only. Do NOT use it commercially.
+- 本站资源来自网络，仅限本人学习参考，严禁下载、传播或商用，如侵权请与我联系删除。继续使用将视为同意本声明。
+- 若使用本站提供的 API，请注明出处「GD音乐台(music.gdstudio.xyz)」，尊重作者。
 
 ## ‼️ DISCLAIMER
 - No fork of this project will recieve support, if you use a fork, ask the forker to support you.
@@ -203,5 +219,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/theovilardo">theovilardo</a>
+  Made with ❤️ by <a href="https://github.com/theovilardo">theovilardo</a>. This build adds GD Studio search and local download.
 </p>
