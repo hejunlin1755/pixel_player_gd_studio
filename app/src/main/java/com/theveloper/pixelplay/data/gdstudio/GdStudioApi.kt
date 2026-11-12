@@ -7,7 +7,7 @@ import org.json.JSONObject
 
 /**
  * GD Studio online music API (music.gdstudio.xyz).
- * Study use only. Credit: GD音乐台(music.gdstudio.xyz).
+ * Credit: GD音乐台(music.gdstudio.xyz).
  */
 object GdStudioApi {
     const val BASE = "https://music-api.gdstudio.xyz/api.php"

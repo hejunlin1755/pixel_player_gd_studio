@@ -131,7 +131,7 @@ fun StreamingProviderSheet(
             ProviderCard(
                 icon = Icons.Rounded.MusicNote,
                 title = "GD音乐台",
-                subtitle = "在线搜索 · 仅供学习",
+                subtitle = "在线搜索",
                 containerColor = if (isDark) Color(0xFF12342F) else Color(0xFFD7F4EE),
                 contentColor = if (isDark) Color(0xFF7DDFD0) else Color(0xFF0F6E62),
                 iconColor = if (isDark) Color(0xFF7DDFD0) else Color(0xFF0F6E62),

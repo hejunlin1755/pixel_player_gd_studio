@@ -82,7 +82,7 @@ fun GdStudioScreen(
         ) {
             item {
                 Text(
-                    text = "出处：${GdStudioApi.ATTRIBUTION}。仅供学习参考，禁止下载、传播或商用。",
+                    text = "出处：${GdStudioApi.ATTRIBUTION}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
