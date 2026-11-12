@@ -3387,7 +3387,9 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             // Filter out currently playing song
             val currentSongId = playbackStateHolder.stablePlayerState.value.currentSong?.id
-            val deletableSongs = songs.filter { it.id != currentSongId }
+            val deletableSongs = songs.filter {
+                it.contentUriString.startsWith("gdstudio:") || it.id != currentSongId
+            }
 
             if (deletableSongs.isEmpty()) {
                 _toastEvents.emit("Cannot delete currently playing song")
@@ -3463,7 +3465,9 @@ class PlayerViewModel @Inject constructor(
     fun deleteFromDevice(activity: Activity, song: Song, onResult: (Boolean) -> Unit = {}){
         viewModelScope.launch {
             // Failsafe: Prevent deleting the currently playing song
-            if (playbackStateHolder.stablePlayerState.value.currentSong?.id == song.id) {
+            if (!song.contentUriString.startsWith("gdstudio:") &&
+                playbackStateHolder.stablePlayerState.value.currentSong?.id == song.id
+            ) {
                 _toastEvents.emit("Cannot delete currently playing song")
                 onResult(false)
                 return@launch

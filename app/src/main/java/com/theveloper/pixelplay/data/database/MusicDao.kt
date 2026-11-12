@@ -318,6 +318,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         ORDER BY title ASC
     """)
     fun getSongs(
@@ -368,16 +370,18 @@ interface MusicDao {
         applyDirectoryFilter: Boolean
     ): Flow<List<SongEntity>>
 
-    @Query("SELECT * FROM songs WHERE album_id = :albumId ORDER BY disc_number ASC, track_number ASC")
+    @Query("SELECT * FROM songs WHERE album_id = :albumId AND content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD' ORDER BY disc_number ASC, track_number ASC")
     fun getSongsByAlbumId(albumId: Long): Flow<List<SongEntity>>
 
-    @Query("SELECT * FROM songs WHERE artist_id = :artistId ORDER BY title ASC")
+    @Query("SELECT * FROM songs WHERE artist_id = :artistId AND content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD' ORDER BY title ASC")
     fun getSongsByArtistId(artistId: Long): Flow<List<SongEntity>>
 
     @Query("""
         SELECT songs.* FROM songs
         INNER JOIN songs_fts ON songs_fts.rowid = songs.id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND songs_fts MATCH :matchQuery
         ORDER BY songs.title ASC
     """)
@@ -410,6 +414,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         ORDER BY RANDOM()
         LIMIT :limit
     """)
@@ -422,6 +428,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
     """)
     fun getAllSongs(
         allowedParentDirs: List<String> = emptyList(),
@@ -431,6 +439,8 @@ interface MusicDao {
     @Query("""
         SELECT id, parent_directory_path, title, album_art_uri_string FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (
             :filterMode = 0
             OR (
@@ -453,6 +463,8 @@ interface MusicDao {
     @Query("""
         SELECT id FROM songs
         WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (
             :filterMode = 0
             OR (
@@ -528,6 +540,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (
             :filterMode = 0
             OR (
@@ -661,6 +675,8 @@ interface MusicDao {
         SELECT songs.* FROM songs
         INNER JOIN songs_fts ON songs_fts.rowid = songs.id
         WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND songs_fts MATCH :matchQuery
         ORDER BY songs.title ASC
     """)
@@ -687,6 +703,8 @@ interface MusicDao {
         SELECT songs.* FROM songs
         INNER JOIN songs_fts ON songs_fts.rowid = songs.id
         WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND songs_fts MATCH :matchQuery
         ORDER BY songs.title ASC
         LIMIT :limit
@@ -717,6 +735,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND genre LIKE :genreName
         ORDER BY title ASC
     """)
@@ -740,6 +760,8 @@ interface MusicDao {
         FROM albums
         INNER JOIN songs ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND (
             :filterMode = 0
             OR (
@@ -824,6 +846,8 @@ interface MusicDao {
         FROM albums
         INNER JOIN songs ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         GROUP BY
             albums.id,
             albums.title,
@@ -877,6 +901,8 @@ interface MusicDao {
         FROM albums
         INNER JOIN songs ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND (albums.title LIKE '%' || :query || '%' OR albums.artist_name LIKE '%' || :query || '%')
         GROUP BY
             albums.id,
@@ -899,6 +925,8 @@ interface MusicDao {
         SELECT DISTINCT artists.* FROM artists
         INNER JOIN songs ON artists.id = songs.artist_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         ORDER BY artists.name ASC
     """)
     fun getArtists(
@@ -926,6 +954,8 @@ interface MusicDao {
         SELECT DISTINCT artists.* FROM artists
         INNER JOIN songs ON artists.id = songs.artist_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         ORDER BY artists.name ASC
     """)
     suspend fun getAllArtistsList(
@@ -946,6 +976,8 @@ interface MusicDao {
         INNER JOIN song_artist_cross_ref ON artists.id = song_artist_cross_ref.artist_id
         INNER JOIN songs ON song_artist_cross_ref.song_id = songs.id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND artists.name LIKE '%' || :query || '%'
         GROUP BY artists.id
         ORDER BY artists.name ASC
@@ -987,6 +1019,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND genre LIKE :genreName
         ORDER BY title ASC
     """)
@@ -999,6 +1033,8 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (genre IS NULL OR genre = '')
         ORDER BY title ASC
     """)
@@ -1026,6 +1062,8 @@ interface MusicDao {
         SELECT EXISTS(
             SELECT 1 FROM songs
             WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
             AND (genre IS NULL OR genre = '')
         )
     """)
@@ -1137,10 +1175,10 @@ interface MusicDao {
     @Query("UPDATE songs SET lyrics = NULL")
     suspend fun resetAllLyrics()
 
-    @Query("SELECT * FROM songs")
+    @Query("SELECT * FROM songs WHERE content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD'")
     suspend fun getAllSongsList(): List<SongEntity>
 
-    @Query("SELECT id, title, artist_name, album_name, duration FROM songs WHERE source_type = 0")
+    @Query("SELECT id, title, artist_name, album_name, duration FROM songs WHERE source_type = 0 AND content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD'")
     suspend fun getAllLocalSongSummaries(): List<SongSummary>
 
     @Query("SELECT album_art_uri_string FROM songs WHERE id=:id")
@@ -1207,6 +1245,8 @@ interface MusicDao {
         SELECT songs.* FROM songs
         INNER JOIN song_artist_cross_ref ON songs.id = song_artist_cross_ref.song_id
         WHERE song_artist_cross_ref.artist_id = :artistId
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         ORDER BY songs.title ASC
     """)
     fun getSongsForArtist(artistId: Long): Flow<List<SongEntity>>
@@ -1218,6 +1258,8 @@ interface MusicDao {
         SELECT songs.* FROM songs
         INNER JOIN song_artist_cross_ref ON songs.id = song_artist_cross_ref.song_id
         WHERE song_artist_cross_ref.artist_id = :artistId
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         ORDER BY songs.title ASC
     """)
     suspend fun getSongsForArtistList(artistId: Long): List<SongEntity>
@@ -1268,6 +1310,8 @@ interface MusicDao {
         INNER JOIN song_artist_cross_ref ON artists.id = song_artist_cross_ref.artist_id
         INNER JOIN songs ON song_artist_cross_ref.song_id = songs.id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND songs.content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND (
             :filterMode = 0
             OR (

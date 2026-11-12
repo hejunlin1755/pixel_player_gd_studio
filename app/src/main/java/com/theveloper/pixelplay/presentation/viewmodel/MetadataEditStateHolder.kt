@@ -186,6 +186,10 @@ class MetadataEditStateHolder @Inject constructor(
     }
 
     suspend fun deleteSong(song: Song): Boolean = withContext(Dispatchers.IO) {
+        if (song.contentUriString.startsWith("gdstudio:")) {
+            deleteOwnedGdFiles(song)
+            return@withContext true
+        }
         val fileInfo = FileDeletionUtils.getFileInfo(song.path)
         if (fileInfo.exists && fileInfo.canWrite) {
             val success = FileDeletionUtils.deleteFile(context, song.path)
@@ -211,6 +215,25 @@ class MetadataEditStateHolder @Inject constructor(
             }
         } else {
             false
+        }
+    }
+
+    private fun deleteOwnedGdFiles(song: Song) {
+        val path = song.path
+        if (path.startsWith("/")) {
+            val audio = java.io.File(path)
+            if (audio.path.contains("${java.io.File.separator}gdstudio${java.io.File.separator}")) {
+                audio.delete()
+                java.io.File(audio.parentFile, "${audio.nameWithoutExtension}.jpg").delete()
+                java.io.File(audio.parentFile, "${audio.nameWithoutExtension}.lrc").delete()
+            }
+        }
+        val art = song.albumArtUriString
+        if (!art.isNullOrBlank() && art.startsWith("file:")) {
+            val cover = java.io.File(Uri.parse(art).path.orEmpty())
+            if (cover.path.contains("${java.io.File.separator}gdstudio${java.io.File.separator}")) {
+                cover.delete()
+            }
         }
     }
 
