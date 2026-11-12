@@ -19,8 +19,8 @@ class GdStudioRepository @Inject constructor(
     okHttpClient: OkHttpClient
 ) {
     private val client = okHttpClient.newBuilder()
-        .callTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
     private val gate = Mutex()

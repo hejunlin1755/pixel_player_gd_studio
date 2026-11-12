@@ -93,36 +93,34 @@ class SearchStateHolder @Inject constructor(
 
                     try {
                         val currentFilter = _selectedSearchFilter.value
-                        val resultsList = withContext(Dispatchers.IO) {
-                            val local = musicRepository.searchAll(normalizedQuery, currentFilter).first()
-                            if (currentFilter != SearchFilterType.ALL && currentFilter != SearchFilterType.SONGS) {
-                                return@withContext local
-                            }
-                            val online = runCatching { gdStudioLibrary.search(normalizedQuery) }
-                                .getOrDefault(emptyList())
-                            if (online.isEmpty()) return@withContext local
-                            val seen = local.mapNotNull { item ->
-                                (item as? SearchResultItem.SongItem)?.song?.id
-                            }.toSet()
-                            local + online
-                                .filter { it.id !in seen }
-                                .map { SearchResultItem.SongItem(it) }
+                        val local = withContext(Dispatchers.IO) {
+                            musicRepository.searchAll(normalizedQuery, currentFilter).first()
                         }
-
                         if (request.requestId != latestSearchRequestId.get()) {
                             return@collectLatest
                         }
+                        _searchResults.value = local.toImmutableList()
 
-                        val immutableResults = resultsList.toImmutableList()
-                        if (_searchResults.value != immutableResults) {
-                            _searchResults.value = immutableResults
+                        if (currentFilter != SearchFilterType.ALL && currentFilter != SearchFilterType.SONGS) {
+                            return@collectLatest
                         }
+                        val online = runCatching { gdStudioLibrary.search(normalizedQuery) }
+                            .getOrDefault(emptyList())
+                        if (request.requestId != latestSearchRequestId.get() || online.isEmpty()) {
+                            return@collectLatest
+                        }
+                        val seen = local.mapNotNull { item ->
+                            (item as? SearchResultItem.SongItem)?.song?.id
+                        }.toSet()
+                        val merged = local + online
+                            .filter { it.id !in seen }
+                            .map { SearchResultItem.SongItem(it) }
+                        _searchResults.value = merged.toImmutableList()
                     } catch (_: CancellationException) {
                         // Superseded by a newer query; ignore.
                     } catch (e: Exception) {
                         if (request.requestId == latestSearchRequestId.get()) {
                             Log.e("SearchStateHolder", "Error performing search for query: $normalizedQuery", e)
-                            _searchResults.value = persistentListOf()
                         }
                     }
                 }

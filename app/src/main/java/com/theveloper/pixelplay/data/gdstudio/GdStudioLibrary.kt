@@ -13,6 +13,9 @@ import com.theveloper.pixelplay.data.model.ArtistRef
 import com.theveloper.pixelplay.data.model.Song
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -38,19 +41,23 @@ class GdStudioLibrary @Inject constructor(
         .callTimeout(3, TimeUnit.MINUTES)
         .build()
 
-    suspend fun search(query: String): List<Song> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
-        val tracks = mutableListOf<Track>()
-        for (source in GdStudioApi.stableSources) {
-            val page = runCatching {
-                repository.search(source, query, count = 8)
-            }.getOrDefault(emptyList())
-            tracks += page
+    suspend fun search(query: String): List<Song> {
+        if (query.isBlank()) return emptyList()
+        val tracks = coroutineScope {
+            GdStudioApi.stableSources.map { source ->
+                async(Dispatchers.IO) {
+                    runCatching { repository.search(source, query, count = 8) }
+                        .getOrDefault(emptyList())
+                }
+            }.awaitAll().flatten()
         }
-        tracks.distinctBy { "${it.source}:${it.id}" }.map { track ->
+        val songs = mutableListOf<Song>()
+        for (track in tracks.distinctBy { "${it.source}:${it.id}" }) {
             val songId = stableId("song:${track.source}:${track.id}")
-            musicDao.getSongByIdOnce(songId)?.toSong() ?: remoteSong(track, songId)
+            val saved = musicDao.getSongByIdOnce(songId)?.toSong()
+            songs += saved ?: remoteSong(track, songId)
         }
+        return songs
     }
 
     suspend fun ensureLocal(song: Song): Song = withContext(Dispatchers.IO) {
