@@ -21,6 +21,7 @@ object SourceType {
     const val GDRIVE = 3
     const val QQMUSIC = 4
     const val NAVIDROME = 5
+    const val GD = 6
 
     /** Derive source type from a content URI string (fallback for migration / conversion). */
     fun fromContentUri(uri: String): Int = when {

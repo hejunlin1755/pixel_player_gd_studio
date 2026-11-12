@@ -1876,23 +1876,31 @@ class PlayerViewModel @Inject constructor(
         cancelPendingQueueBuild: Boolean = true
     ) {
         if (song.contentUriString.startsWith("gdstudio:")) {
-            viewModelScope.launch {
-                _toastEvents.emit("正在下载到本地")
-                val localSong = try {
-                    gdStudioLibrary.ensureLocal(song)
-                } catch (error: Exception) {
-                    _toastEvents.emit(error.message ?: "下载失败")
-                    return@launch
+            val cached = song.path.takeIf { it.startsWith("/") }?.let { path -> java.io.File(path) }
+            val cacheReady = cached != null && cached.isFile && cached.length() > 0L
+            if (!cacheReady) {
+                viewModelScope.launch {
+                    _toastEvents.emit("正在缓存")
+                    val ready = try {
+                        gdStudioLibrary.ensureCached(song)
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        _toastEvents.emit(error.message ?: "缓存失败")
+                        return@launch
+                    }
+                    showAndPlaySong(
+                        song = ready,
+                        contextSongs = contextSongs.map { queued ->
+                            if (queued.id == song.id || queued.contentUriString == song.contentUriString) ready else queued
+                        },
+                        queueName = queueName,
+                        isVoluntaryPlay = isVoluntaryPlay,
+                        cancelPendingQueueBuild = cancelPendingQueueBuild
+                    )
                 }
-                showAndPlaySong(
-                    song = localSong,
-                    contextSongs = contextSongs.map { if (it.id == song.id) localSong else it },
-                    queueName = queueName,
-                    isVoluntaryPlay = isVoluntaryPlay,
-                    cancelPendingQueueBuild = cancelPendingQueueBuild
-                )
+                return
             }
-            return
         }
         if (cancelPendingQueueBuild) {
             cancelPendingFullQueuePlayback()
@@ -2689,6 +2697,10 @@ class PlayerViewModel @Inject constructor(
 
     // rebuildPlayerQueue functionality moved to PlaybackStateHolder (simplified)
     fun playSongs(songsToPlay: List<Song>, startSong: Song, queueName: String = "None", playlistId: String? = null) {
+        if (startSong.contentUriString.startsWith("gdstudio:")) {
+            showAndPlaySong(startSong, songsToPlay, queueName)
+            return
+        }
         cancelPendingFullQueuePlayback()
         viewModelScope.launch {
             transitionSchedulerJob?.cancel()
@@ -2979,7 +2991,13 @@ class PlayerViewModel @Inject constructor(
                 if (startingUri.scheme == "telegram") {
                     ensureTelegramPlaybackObserversStarted()
                 }
-                dualPlayerEngine.resolveCloudUri(startingUri)
+                try {
+                    dualPlayerEngine.resolveCloudUri(startingUri)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    Timber.tag("PlayerViewModel").w(error, "Cloud URI resolve failed")
+                }
             }
 
             val preparedPlaybackQueue = preparePlaybackQueue(
@@ -3093,21 +3111,63 @@ class PlayerViewModel @Inject constructor(
         musicRepository.setFavoriteStatus(songId, isFavorite)
     }
 
-    fun toggleFavorite() {
-        playbackStateHolder.stablePlayerState.value.currentSong?.id?.let { songId ->
-            viewModelScope.launch {
-                val currentlyFavorite = favoriteSongIds.value.contains(songId)
-                setFavoriteStatusEverywhere(songId, !currentlyFavorite)
+    fun downloadCurrentSong(quality: String) {
+        val song = playbackStateHolder.stablePlayerState.value.currentSong ?: return
+        if (!song.contentUriString.startsWith("gdstudio:")) return
+        viewModelScope.launch {
+            _toastEvents.emit("正在下载")
+            val saved = try {
+                gdStudioLibrary.ensureLocal(gdStudioLibrary.withQuality(song, quality))
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _toastEvents.emit(error.message ?: "下载失败")
+                return@launch
             }
+            playbackStateHolder.updateStablePlayerState { state ->
+                if (state.currentSong?.contentUriString?.startsWith("gdstudio:") == true) {
+                    state.copy(currentSong = saved)
+                } else {
+                    state
+                }
+            }
+            _playerUiState.update { state ->
+                state.copy(
+                    currentPlaybackQueue = state.currentPlaybackQueue.map { queued ->
+                        if (queued.id == song.id || queued.contentUriString == song.contentUriString) saved else queued
+                    }.toImmutableList()
+                )
+            }
+            _toastEvents.emit("已保存到曲库")
+        }
+    }
+
+    fun toggleFavorite() {
+        val song = playbackStateHolder.stablePlayerState.value.currentSong ?: return
+        viewModelScope.launch {
+            val target = favoriteSong(song)
+            val currentlyFavorite = favoriteSongIds.value.contains(target.id)
+            setFavoriteStatusEverywhere(target.id, !currentlyFavorite)
         }
     }
 
     fun toggleFavoriteSpecificSong(song: Song, removing: Boolean = false) {
         viewModelScope.launch {
-            val currentlyFavorite = favoriteSongIds.value.contains(song.id)
+            val target = favoriteSong(song)
+            val currentlyFavorite = favoriteSongIds.value.contains(target.id) || favoriteSongIds.value.contains(song.id)
             val targetFavoriteState = if (removing) false else !currentlyFavorite
-            setFavoriteStatusEverywhere(song.id, targetFavoriteState)
+            setFavoriteStatusEverywhere(target.id, targetFavoriteState)
         }
+    }
+
+    private suspend fun favoriteSong(song: Song): Song {
+        if (!song.contentUriString.startsWith("gdstudio:")) return song
+        val stored = gdStudioLibrary.remember(song)
+        val current = playbackStateHolder.stablePlayerState.value.currentSong
+        if (current != null && (current.id == song.id || current.contentUriString == song.contentUriString) && current.id != stored.id) {
+            playbackStateHolder.updateStablePlayerState { it.copy(currentSong = current.copy(id = stored.id)) }
+        }
+        return stored
     }
 
     fun addSongToQueue(song: Song) {

@@ -147,7 +147,13 @@ interface MusicDao {
     @Query("SELECT id FROM songs")
     suspend fun getAllSongIds(): List<Long>
 
-    @Query("SELECT id FROM songs WHERE source_type = 0")
+    @Query("""
+        SELECT id FROM songs
+        WHERE source_type = 0
+        AND content_uri_string NOT LIKE 'gdstudio:%'
+        AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
+        AND IFNULL(parent_directory_path, '') NOT LIKE '%/gdstudio'
+    """)
     suspend fun getAllMediaStoreSongIds(): List<Long>
 
     @Query("DELETE FROM songs WHERE id IN (:songIds)")

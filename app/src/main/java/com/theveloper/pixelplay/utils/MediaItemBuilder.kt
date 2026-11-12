@@ -79,11 +79,19 @@ object MediaItemBuilder {
             .build()
     }
 
-    fun playbackUri(song: Song): Uri = playbackUri(
-        contentUriString = song.contentUriString,
-        filePath = song.path,
-        mimeType = song.mimeType
-    )
+    fun playbackUri(song: Song): Uri {
+        if (song.contentUriString.startsWith("gdstudio:")) {
+            val cached = song.path.takeIf { it.startsWith("/") }?.let(::File)
+            if (cached != null && cached.isFile && cached.length() > 0L) {
+                return Uri.fromFile(cached)
+            }
+        }
+        return playbackUri(
+            contentUriString = song.contentUriString,
+            filePath = song.path,
+            mimeType = song.mimeType
+        )
+    }
 
     fun playbackUri(
         contentUriString: String,

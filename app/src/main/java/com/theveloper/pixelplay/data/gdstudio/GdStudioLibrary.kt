@@ -8,6 +8,7 @@ import com.theveloper.pixelplay.data.database.ArtistEntity
 import com.theveloper.pixelplay.data.database.MusicDao
 import com.theveloper.pixelplay.data.database.SongArtistCrossRef
 import com.theveloper.pixelplay.data.database.SongEntity
+import com.theveloper.pixelplay.data.database.SourceType
 import com.theveloper.pixelplay.data.database.toSong
 import com.theveloper.pixelplay.data.model.ArtistRef
 import com.theveloper.pixelplay.data.model.Song
@@ -60,14 +61,103 @@ class GdStudioLibrary @Inject constructor(
         return songs
     }
 
-    suspend fun ensureLocal(song: Song): Song = withContext(Dispatchers.IO) {
-        val ref = GdStudioApi.parseTrackUri(song.contentUriString) ?: return@withContext song
-        val songId = song.id.toLongOrNull() ?: stableId("song:${ref.source}:${ref.trackId}")
+    fun asPlayable(song: Song): Song {
+        val ref = GdStudioApi.parseTrackUri(song.contentUriString) ?: return song
+        val songId = stableId("song:${ref.source}:${ref.trackId}")
+        if (song.id == songId.toString()) return song
+        val artistName = song.artist.ifBlank { "未知歌手" }
+        val albumName = song.album.ifBlank { "未知专辑" }
+        val artistId = stableId("artist:$artistName")
+        val albumId = stableId("album:$artistName:$albumName")
+        return song.copy(
+            id = songId.toString(),
+            artistId = artistId,
+            albumId = albumId,
+            artists = listOf(ArtistRef(id = artistId, name = artistName, isPrimary = true))
+        )
+    }
+
+    fun withQuality(song: Song, br: String): Song {
+        val ref = GdStudioApi.parseTrackUri(song.contentUriString) ?: return song
+        val pic = picIdOf(song)
+        val uri = GdStudioApi.trackUri(ref.source, ref.trackId, ref.lyricId, br) +
+            "&pic=${Uri.encode(pic)}"
+        return song.copy(contentUriString = uri)
+    }
+
+    /** Keeps a favorite visible in the library before the audio is saved. */
+    suspend fun remember(song: Song): Song = withContext(Dispatchers.IO) {
+        val playable = asPlayable(song)
+        val songId = playable.id.toLong()
+        val existing = musicDao.getSongByIdOnce(songId)
+        if (existing != null && isLibraryFile(existing.filePath)) {
+            return@withContext existing.toSong()
+        }
+        val cache = playable.path.takeIf { isCacheFile(it) }?.let(::File)?.takeIf { it.isFile && it.length() > 0L }
+        saveSong(
+            song = playable,
+            audio = cache,
+            cover = null,
+            lyrics = playable.lyrics,
+            duration = playable.duration,
+            contentUri = playable.contentUriString,
+            parent = CLOUD_PARENT,
+            sourceType = SourceType.LOCAL
+        )
+        playable
+    }
+
+    suspend fun ensureCached(song: Song): Song = withContext(Dispatchers.IO) {
+        val playable = asPlayable(song)
+        val songId = playable.id.toLong()
         musicDao.getSongByIdOnce(songId)?.let { existing ->
-            if (existing.filePath.isNotBlank() && File(existing.filePath).exists()) {
-                return@withContext existing.toSong()
+            if (isLibraryFile(existing.filePath)) return@withContext existing.toSong()
+            if (isCacheFile(existing.filePath) && File(existing.filePath).let { it.isFile && it.length() > 0L }) {
+                return@withContext existing.toSong().copy(contentUriString = playable.contentUriString)
             }
         }
+        val ready = playable.path.takeIf { isCacheFile(it) }?.let(::File)
+        if (ready != null && ready.isFile && ready.length() > 0L) {
+            return@withContext playable
+        }
+        val ref = GdStudioApi.parseTrackUri(playable.contentUriString)
+            ?: throw GdStudioException("无法识别这首歌")
+        val streamUrl = repository.streamUrl(ref.source, ref.trackId, ref.br)
+            ?: throw GdStudioException("没有拿到音频地址")
+        val directory = File(context.cacheDir, "gdstudio").apply { mkdirs() }
+        val audioFile = File(directory, "$songId${extensionOf(streamUrl, ref.br)}")
+        if (!audioFile.isFile || audioFile.length() == 0L) {
+            download(streamUrl, audioFile)
+        }
+        val coverFile = cacheCover(directory, songId, ref.source, picIdOf(playable))
+        val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
+        val duration = readDuration(audioFile)
+        val cached = playable.copy(
+            path = audioFile.absolutePath,
+            albumArtUriString = coverFile?.let { Uri.fromFile(it).toString() } ?: playable.albumArtUriString,
+            lyrics = lyrics ?: playable.lyrics,
+            duration = duration,
+            mimeType = mimeOf(audioFile)
+        )
+        if (musicDao.getSongByIdOnce(songId) != null) {
+            saveSong(
+                song = cached,
+                audio = audioFile,
+                cover = coverFile,
+                lyrics = cached.lyrics,
+                duration = duration,
+                contentUri = cached.contentUriString,
+                parent = CLOUD_PARENT,
+                sourceType = SourceType.LOCAL
+            )
+        }
+        cached
+    }
+
+    suspend fun ensureLocal(song: Song): Song = withContext(Dispatchers.IO) {
+        val playable = asPlayable(song)
+        val ref = GdStudioApi.parseTrackUri(playable.contentUriString) ?: return@withContext playable
+        val songId = playable.id.toLong()
 
         val streamUrl = repository.streamUrl(ref.source, ref.trackId, ref.br)
             ?: throw GdStudioException("没有拿到音频地址")
@@ -75,19 +165,41 @@ class GdStudioLibrary @Inject constructor(
         val audioFile = File(directory, "$songId${extensionOf(streamUrl, ref.br)}")
         download(streamUrl, audioFile)
 
-        val coverFile = repository.coverUrl(ref.source, picIdOf(song))?.let { coverUrl ->
+        val coverFile = repository.coverUrl(ref.source, picIdOf(playable))?.let { coverUrl ->
             val file = File(directory, "$songId.jpg")
             runCatching { download(coverUrl, file) }.getOrNull()
             file.takeIf { it.exists() && it.length() > 0L }
         }
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
         val duration = readDuration(audioFile)
+        saveSong(
+            song = playable,
+            audio = audioFile,
+            cover = coverFile,
+            lyrics = lyrics,
+            duration = duration,
+            contentUri = Uri.fromFile(audioFile).toString(),
+            parent = directory.absolutePath,
+            sourceType = SourceType.LOCAL
+        )
+    }
+
+    private suspend fun saveSong(
+        song: Song,
+        audio: File?,
+        cover: File?,
+        lyrics: String?,
+        duration: Long,
+        contentUri: String,
+        parent: String,
+        sourceType: Int
+    ): Song {
+        val songId = song.id.toLong()
         val artistName = song.artist.ifBlank { "未知歌手" }
         val albumName = song.album.ifBlank { "未知专辑" }
-        val artistId = stableId("artist:$artistName")
-        val albumId = stableId("album:$artistName:$albumName")
+        val artistId = song.artistId.takeIf { it > 0L } ?: stableId("artist:$artistName")
+        val albumId = song.albumId.takeIf { it > 0L } ?: stableId("album:$artistName:$albumName")
         val now = System.currentTimeMillis()
-
         musicDao.insertArtists(
             listOf(ArtistEntity(id = artistId, name = artistName, trackCount = 1))
         )
@@ -98,7 +210,7 @@ class GdStudioLibrary @Inject constructor(
                     title = albumName,
                     artistName = artistName,
                     artistId = artistId,
-                    albumArtUriString = coverFile?.let { Uri.fromFile(it).toString() },
+                    albumArtUriString = cover?.let { Uri.fromFile(it).toString() },
                     songCount = 1,
                     dateAdded = now,
                     year = 0
@@ -113,22 +225,42 @@ class GdStudioLibrary @Inject constructor(
             albumArtist = artistName,
             albumName = albumName,
             albumId = albumId,
-            contentUriString = Uri.fromFile(audioFile).toString(),
-            albumArtUriString = coverFile?.let { Uri.fromFile(it).toString() },
+            contentUriString = contentUri,
+            albumArtUriString = cover?.let { Uri.fromFile(it).toString() } ?: song.albumArtUriString,
             duration = duration,
             genre = null,
-            filePath = audioFile.absolutePath,
-            parentDirectoryPath = directory.absolutePath,
+            filePath = audio?.absolutePath.orEmpty(),
+            parentDirectoryPath = parent,
             lyrics = lyrics,
             dateAdded = now,
-            mimeType = mimeOf(audioFile),
+            mimeType = audio?.let(::mimeOf),
+            sourceType = sourceType,
             artistsJson = """[{"id":$artistId,"name":${jsonString(artistName)},"primary":true}]"""
         )
         musicDao.insertSongs(listOf(entity))
         musicDao.insertSongArtistCrossRefs(
             listOf(SongArtistCrossRef(songId = songId, artistId = artistId, isPrimary = true))
         )
-        entity.toSong()
+        return entity.toSong()
+    }
+
+    private suspend fun cacheCover(directory: File, songId: Long, source: String, picId: String): File? {
+        if (picId.isBlank()) return null
+        val file = File(directory, "$songId.jpg")
+        if (file.isFile && file.length() > 0L) return file
+        val coverUrl = runCatching { repository.coverUrl(source, picId) }.getOrNull() ?: return null
+        return runCatching { download(coverUrl, file) }.fold(
+            onSuccess = { file.takeIf { it.isFile && it.length() > 0L } },
+            onFailure = { null }
+        )
+    }
+
+    private fun isLibraryFile(path: String): Boolean {
+        return path.contains("${File.separator}files${File.separator}gdstudio${File.separator}")
+    }
+
+    private fun isCacheFile(path: String): Boolean {
+        return path.contains("${File.separator}cache${File.separator}") && path.contains("${File.separator}gdstudio${File.separator}")
     }
 
     private fun remoteSong(track: Track, songId: Long): Song {
@@ -204,6 +336,8 @@ class GdStudioLibrary @Inject constructor(
     }
 
     companion object {
+        private const val CLOUD_PARENT = "/Cloud/GD"
+
         fun stableId(key: String): Long {
             val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray())
             var value = 0L

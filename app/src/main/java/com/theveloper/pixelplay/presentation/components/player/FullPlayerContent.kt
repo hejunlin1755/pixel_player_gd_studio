@@ -45,11 +45,16 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularWavyProgressIndicator
@@ -555,9 +560,11 @@ fun FullPlayerContent(
             shuffleTransitionInProgress = shuffleTransitionInProgress,
             repeatModeProvider = repeatModeProvider,
             isFavoriteProvider = isFavoriteProvider,
+            showDownload = song.contentUriString.startsWith("gdstudio:"),
             onShuffleToggle = onShuffleToggle,
             onRepeatToggle = onRepeatToggle,
-            onFavoriteToggle = onFavoriteToggle
+            onFavoriteToggle = onFavoriteToggle,
+            onDownloadQuality = playerViewModel::downloadCurrentSong
         )
     }
 
@@ -1114,9 +1121,11 @@ private fun FullPlayerControlsSection(
     shuffleTransitionInProgress: Boolean,
     repeatModeProvider: () -> Int,
     isFavoriteProvider: () -> Boolean,
+    showDownload: Boolean,
     onShuffleToggle: () -> Unit,
     onRepeatToggle: () -> Unit,
-    onFavoriteToggle: () -> Unit
+    onFavoriteToggle: () -> Unit,
+    onDownloadQuality: (String) -> Unit
 ) {
     val stableControlAnimationSpec = remember {
         tween<Float>(durationMillis = 240, easing = FastOutSlowInEasing)
@@ -1178,9 +1187,11 @@ private fun FullPlayerControlsSection(
                 isShuffleTransitionInProgress = shuffleTransitionInProgress,
                 repeatMode = repeatModeProvider(),
                 isFavoriteProvider = isFavoriteProvider,
+                showDownload = showDownload,
                 onShuffleToggle = onShuffleToggle,
                 onRepeatToggle = onRepeatToggle,
-                onFavoriteToggle = onFavoriteToggle
+                onFavoriteToggle = onFavoriteToggle,
+                onDownloadQuality = onDownloadQuality
             )
         }
     }
@@ -2477,9 +2488,11 @@ private fun BottomToggleRow(
     isShuffleTransitionInProgress: Boolean,
     repeatMode: Int,
     isFavoriteProvider: () -> Boolean,
+    showDownload: Boolean,
     onShuffleToggle: () -> Unit,
     onRepeatToggle: () -> Unit,
-    onFavoriteToggle: () -> Unit
+    onFavoriteToggle: () -> Unit,
+    onDownloadQuality: (String) -> Unit
 ) {
     val isFavorite = isFavoriteProvider()
     val rowCorners = 60.dp
@@ -2567,6 +2580,25 @@ private fun BottomToggleRow(
                 iconId = if (isFavorite) R.drawable.round_favorite_24 else R.drawable.rounded_favorite_24,
                 contentDesc = "Favorito"
             )
+            if (showDownload) {
+                var menuOpen by remember { mutableStateOf(false) }
+                Box(modifier = commonModifier, contentAlignment = Alignment.Center) {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Rounded.Download, contentDescription = "下载", tint = inactiveContentColor)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        listOf("128", "192", "320", "740", "999").forEach { quality ->
+                            DropdownMenuItem(
+                                text = { Text(quality) },
+                                onClick = {
+                                    menuOpen = false
+                                    onDownloadQuality(quality)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

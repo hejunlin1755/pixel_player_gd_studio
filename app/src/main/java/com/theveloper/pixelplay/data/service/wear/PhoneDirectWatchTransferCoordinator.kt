@@ -411,7 +411,7 @@ class PhoneDirectWatchTransferCoordinator @Inject constructor(
             }
             "gdstudio" -> {
                 val ref = GdStudioApi.parseTrackUri(rawUri) ?: return null
-                gdStudioRepository.streamUrl(ref.source, ref.trackId, ref.br)
+                runCatching { gdStudioRepository.streamUrl(ref.source, ref.trackId, ref.br) }.getOrNull()
             }
             "gdrive" -> {
                 ensureGDriveProxyReady() || return null

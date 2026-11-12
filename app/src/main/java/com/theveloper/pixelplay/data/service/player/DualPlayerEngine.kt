@@ -159,7 +159,7 @@ class DualPlayerEngine @Inject constructor(
                         if (nextUri?.scheme == "telegram") {
                             telegramRepository.preResolveTelegramUri(nextUri.toString())
                         } else if (nextUri?.scheme == "netease" || nextUri?.scheme == "qqmusic" || nextUri?.scheme == "navidrome" || nextUri?.scheme == "gdstudio") {
-                            scope.launch { resolveCloudUri(nextUri) }
+                            scope.launch { runCatching { resolveCloudUri(nextUri) } }
                         }
                     }
                     // 2. Pre-resolver ANTERIOR (para rapidez al retroceder)
@@ -169,7 +169,7 @@ class DualPlayerEngine @Inject constructor(
                         if (prevUri?.scheme == "telegram") {
                             telegramRepository.preResolveTelegramUri(prevUri.toString())
                         } else if (prevUri?.scheme == "netease" || prevUri?.scheme == "qqmusic" || prevUri?.scheme == "navidrome" || prevUri?.scheme == "gdstudio") {
-                            scope.launch { resolveCloudUri(prevUri) }
+                            scope.launch { runCatching { resolveCloudUri(prevUri) } }
                         }
                     }
                 }
@@ -532,13 +532,21 @@ class DualPlayerEngine @Inject constructor(
     }
 
     private suspend fun resolveGdStudioUriAsync(uri: Uri): Uri? {
-        val ref = GdStudioApi.parseTrackUri(uri.toString()) ?: return null
-        val streamUrl = gdStudioRepository.streamUrl(ref.source, ref.trackId, ref.br)
-        if (streamUrl.isNullOrBlank()) {
-            Timber.tag("DualPlayerEngine").w("Failed to resolve GD Studio URI")
-            return null
+        return try {
+            val ref = GdStudioApi.parseTrackUri(uri.toString()) ?: return null
+            val streamUrl = gdStudioRepository.streamUrl(ref.source, ref.trackId, ref.br)
+            if (streamUrl.isNullOrBlank()) {
+                Timber.tag("DualPlayerEngine").w("Failed to resolve GD Studio URI")
+                null
+            } else {
+                Uri.parse(streamUrl)
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.tag("DualPlayerEngine").w(error, "GD Studio resolve failed")
+            null
         }
-        return Uri.parse(streamUrl)
     }
 
     /**
