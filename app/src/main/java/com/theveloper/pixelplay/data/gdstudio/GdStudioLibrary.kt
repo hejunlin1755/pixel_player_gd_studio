@@ -44,14 +44,17 @@ class GdStudioLibrary @Inject constructor(
 
     suspend fun search(query: String): List<Song> {
         if (query.isBlank()) return emptyList()
-        val tracks = coroutineScope {
+        val outcomes = coroutineScope {
             GdStudioApi.stableSources.map { source ->
                 async(Dispatchers.IO) {
                     runCatching { repository.search(source, query, count = 8) }
-                        .getOrDefault(emptyList())
                 }
-            }.awaitAll().flatten()
+            }.awaitAll()
         }
+        if (outcomes.all { it.isFailure }) {
+            throw outcomes.firstNotNullOf { it.exceptionOrNull() }
+        }
+        val tracks = outcomes.mapNotNull { it.getOrNull() }.flatten()
         val songs = mutableListOf<Song>()
         for (track in tracks.distinctBy { "${it.source}:${it.id}" }) {
             val songId = stableId("song:${track.source}:${track.id}")

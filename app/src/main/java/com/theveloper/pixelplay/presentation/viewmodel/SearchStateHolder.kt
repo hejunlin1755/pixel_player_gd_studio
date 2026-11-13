@@ -26,6 +26,13 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
+enum class SearchStatus {
+    Idle,
+    Searching,
+    Failed,
+    Ready
+}
+
 /**
  * Manages search state and operations.
  * Extracted from PlayerViewModel to improve modularity.
@@ -53,6 +60,9 @@ class SearchStateHolder @Inject constructor(
     // Search State
     private val _searchResults = MutableStateFlow<ImmutableList<SearchResultItem>>(persistentListOf())
     val searchResults = _searchResults.asStateFlow()
+
+    private val _searchStatus = MutableStateFlow(SearchStatus.Idle)
+    val searchStatus = _searchStatus.asStateFlow()
 
     private val _selectedSearchFilter = MutableStateFlow(SearchFilterType.ALL)
     val selectedSearchFilter = _selectedSearchFilter.asStateFlow()
@@ -89,6 +99,7 @@ class SearchStateHolder @Inject constructor(
                         if (_searchResults.value.isNotEmpty()) {
                             _searchResults.value = persistentListOf()
                         }
+                        _searchStatus.value = SearchStatus.Idle
                         return@collectLatest
                     }
 
@@ -102,29 +113,42 @@ class SearchStateHolder @Inject constructor(
                         }
                         _searchResults.value = local.toImmutableList()
 
-                        if (currentFilter != SearchFilterType.ALL && currentFilter != SearchFilterType.SONGS) {
+                        val fetchesOnline = request.fetchOnline &&
+                            (currentFilter == SearchFilterType.ALL || currentFilter == SearchFilterType.SONGS)
+                        if (!fetchesOnline) {
+                            _searchStatus.value = SearchStatus.Ready
                             return@collectLatest
                         }
-                        if (!request.fetchOnline) {
+                        val online = try {
+                            gdStudioLibrary.search(normalizedQuery)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            if (request.requestId == latestSearchRequestId.get()) {
+                                Log.e("SearchStateHolder", "Online search failed for query: $normalizedQuery", error)
+                                _searchStatus.value = SearchStatus.Failed
+                            }
                             return@collectLatest
                         }
-                        val online = runCatching { gdStudioLibrary.search(normalizedQuery) }
-                            .getOrDefault(emptyList())
-                        if (request.requestId != latestSearchRequestId.get() || online.isEmpty()) {
+                        if (request.requestId != latestSearchRequestId.get()) {
                             return@collectLatest
                         }
-                        val seen = local.mapNotNull { item ->
-                            (item as? SearchResultItem.SongItem)?.song?.id
-                        }.toSet()
-                        val merged = local + online
-                            .filter { it.id !in seen }
-                            .map { SearchResultItem.SongItem(it) }
-                        _searchResults.value = merged.toImmutableList()
+                        if (online.isNotEmpty()) {
+                            val seen = local.mapNotNull { item ->
+                                (item as? SearchResultItem.SongItem)?.song?.id
+                            }.toSet()
+                            val merged = local + online
+                                .filter { it.id !in seen }
+                                .map { SearchResultItem.SongItem(it) }
+                            _searchResults.value = merged.toImmutableList()
+                        }
+                        _searchStatus.value = SearchStatus.Ready
                     } catch (_: CancellationException) {
                         // Superseded by a newer query; ignore.
                     } catch (e: Exception) {
                         if (request.requestId == latestSearchRequestId.get()) {
                             Log.e("SearchStateHolder", "Error performing search for query: $normalizedQuery", e)
+                            _searchStatus.value = SearchStatus.Failed
                         }
                     }
                 }
@@ -172,6 +196,9 @@ class SearchStateHolder @Inject constructor(
             if (_searchResults.value.isNotEmpty()) {
                 _searchResults.value = persistentListOf()
             }
+            _searchStatus.value = SearchStatus.Idle
+        } else if (fetchOnline) {
+            _searchStatus.value = SearchStatus.Searching
         }
 
         searchRequests.tryEmit(SearchRequest(normalizedQuery, requestId, fetchOnline && normalizedQuery.isNotBlank()))

@@ -1642,14 +1642,16 @@ class PlayerViewModel @Inject constructor(
                 searchStateHolder.searchResults,
                 searchStateHolder.selectedSearchFilter,
                 searchStateHolder.searchHistory,
-            ) { results, filter, history ->
-                Triple(results, filter, history)
-            }.collect { (results, filter, history) ->
+                searchStateHolder.searchStatus,
+            ) { results, filter, history, status ->
+                PlayerUiStateSearchSlice(results, filter, history, status)
+            }.collect { slice ->
                 _playerUiState.update {
                     it.copy(
-                        searchResults = results,
-                        selectedSearchFilter = filter,
-                        searchHistory = history,
+                        searchResults = slice.results,
+                        selectedSearchFilter = slice.filter,
+                        searchHistory = slice.history,
+                        searchStatus = slice.status,
                     )
                 }
             }

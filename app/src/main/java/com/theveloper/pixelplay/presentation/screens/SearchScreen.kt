@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -80,6 +81,7 @@ import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SmartImageListTargetSize
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
+import com.theveloper.pixelplay.presentation.viewmodel.SearchStatus
 import android.util.Log
 import com.theveloper.pixelplay.ui.theme.LocalPixelPlayDarkTheme
 import androidx.compose.material.icons.rounded.DeleteForever
@@ -180,6 +182,7 @@ fun SearchScreen(
         }
     }
     val searchResults = uiState.searchResults
+    val searchStatus = uiState.searchStatus
     val handleSongMoreOptionsClick: (Song) -> Unit = { song ->
         playerViewModel.selectSongForInfo(song)
         showSongInfoBottomSheet = true
@@ -307,11 +310,19 @@ fun SearchScreen(
                                             .clip(CircleShape)
                                             .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Search,
-                                            contentDescription = "搜索",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
+                                        if (searchStatus == SearchStatus.Searching) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Search,
+                                                contentDescription = "搜索",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
                                     }
                                 }
                             },
@@ -380,6 +391,33 @@ fun SearchScreen(
                             SearchFilterChip(SearchFilterType.ARTISTS, currentFilter, playerViewModel)
                             SearchFilterChip(SearchFilterType.PLAYLISTS, currentFilter, playerViewModel)
                         }
+                        if (searchStatus == SearchStatus.Searching && searchResults.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "正在搜索在线歌曲",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        if (searchStatus == SearchStatus.Failed && searchResults.isNotEmpty()) {
+                            Text(
+                                text = "在线搜索失败，本地结果仍可用",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                         Crossfade(
                             targetState = searchResults.isEmpty(),
                             animationSpec = tween(durationMillis = 190),
@@ -388,6 +426,7 @@ fun SearchScreen(
                             if (isEmpty) {
                                 EmptySearchResults(
                                     searchQuery = searchQuery,
+                                    searchStatus = searchStatus,
                                     colorScheme = colorScheme
                                 )
                             } else {
@@ -602,33 +641,58 @@ fun SearchHistoryListItem(
 
 
 @Composable
-fun EmptySearchResults(searchQuery: String, colorScheme: ColorScheme) {
+fun EmptySearchResults(
+    searchQuery: String,
+    searchStatus: SearchStatus,
+    colorScheme: ColorScheme
+) {
+    val failed = searchStatus == SearchStatus.Failed
+    val searching = searchStatus == SearchStatus.Searching
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Search,
-            contentDescription = "No results",
-            modifier = Modifier
-                .size(80.dp)
-                .padding(bottom = 16.dp),
-            tint = colorScheme.primary.copy(alpha = 0.6f)
-        )
+        if (searching) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .size(48.dp)
+                    .padding(bottom = 16.dp),
+                color = colorScheme.primary
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(80.dp)
+                    .padding(bottom = 16.dp),
+                tint = if (failed) colorScheme.error else colorScheme.primary.copy(alpha = 0.6f)
+            )
+        }
 
         Text(
-            text = if (searchQuery.isNotBlank()) "No results for \"$searchQuery\"" else "Nothing found",
+            text = when {
+                searching -> "正在搜索"
+                failed -> "搜索失败"
+                searchQuery.isNotBlank() -> "没有找到「$searchQuery」"
+                else -> "没有结果"
+            },
             style = MaterialTheme.typography.titleLarge,
             textAlign = TextAlign.Center,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            color = if (failed) colorScheme.error else colorScheme.onBackground
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Try a different search term or check your filters.",
+            text = when {
+                searching -> "正在查询 GD音乐台，请稍等"
+                failed -> "在线结果没有拿到，再点一次搜索"
+                else -> "换个词，或看看上面的筛选"
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             textAlign = TextAlign.Center

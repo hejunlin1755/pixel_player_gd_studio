@@ -13,6 +13,13 @@ import com.theveloper.pixelplay.data.model.SearchHistoryItem
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
+internal data class PlayerUiStateSearchSlice(
+    val results: ImmutableList<SearchResultItem>,
+    val filter: SearchFilterType,
+    val history: ImmutableList<SearchHistoryItem>,
+    val status: SearchStatus
+)
+
 @Immutable
 data class PlayerUiState(
     // val allSongs: ImmutableList<Song> = persistentListOf(), // REMOVED
@@ -22,6 +29,7 @@ data class PlayerUiState(
     // val albums: ImmutableList<Album> = persistentListOf(), // REMOVED
     // val artists: ImmutableList<Artist> = persistentListOf(), // REMOVED
     val searchResults: ImmutableList<SearchResultItem> = persistentListOf(),
+    val searchStatus: SearchStatus = SearchStatus.Idle,
     val musicFolders: ImmutableList<MusicFolder> = persistentListOf(),
     val sortOption: SortOption = SortOption.SongDefaultOrder,
     val isLoadingInitialSongs: Boolean = true,
