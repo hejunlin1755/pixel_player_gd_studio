@@ -3790,8 +3790,8 @@ class PlayerViewModel @Inject constructor(
         searchStateHolder.onSearchQuerySubmitted(query)
     }
 
-    fun performSearch(query: String) {
-        searchStateHolder.performSearch(query)
+    fun performSearch(query: String, fetchOnline: Boolean = false) {
+        searchStateHolder.performSearch(query, fetchOnline)
     }
 
     fun deleteSearchHistoryItem(query: String) {

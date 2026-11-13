@@ -40,7 +40,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -144,6 +144,8 @@ fun SearchScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val searchInputFocusRequester = remember { FocusRequester() }
 
+    var submittedQuery by rememberSaveable { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
         onSearchBarActiveChange(false)
     }
@@ -156,9 +158,26 @@ fun SearchScreen(
         }
     }
 
-    // Search debouncing is centralized in SearchStateHolder.
-    LaunchedEffect(searchQuery, currentFilter) {
-        playerViewModel.performSearch(searchQuery)
+    val submitSearch = {
+        val query = searchQuery.trim()
+        if (query.isNotBlank()) {
+            submittedQuery = query
+            playerViewModel.performSearch(query, fetchOnline = true)
+            playerViewModel.onSearchQuerySubmitted(query)
+            keyboardController?.hide()
+        }
+    }
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            submittedQuery = ""
+            playerViewModel.performSearch("")
+        }
+    }
+    LaunchedEffect(currentFilter) {
+        val query = submittedQuery
+        if (query.isNotBlank()) {
+            playerViewModel.performSearch(query, fetchOnline = false)
+        }
     }
     val searchResults = uiState.searchResults
     val handleSongMoreOptionsClick: (Song) -> Unit = { song ->
@@ -242,11 +261,8 @@ fun SearchScreen(
                                 searchQuery = it
                                 playerViewModel.updateSearchQuery(it)
                             },
-                            onSearch = { query ->
-                                if (query.isNotBlank()) {
-                                    playerViewModel.onSearchQuerySubmitted(query)
-                                }
-                                keyboardController?.hide()
+                            onSearch = {
+                                submitSearch()
                             },
                             expanded = false,
                             onExpandedChange = {},
@@ -266,24 +282,29 @@ fun SearchScreen(
                                 )
                             },
                             trailingIcon = {
-                                if (searchQuery.isNotBlank()) {
-                                    IconButton(
-                                        onClick = {
-                                            searchQuery = ""
-                                            playerViewModel.updateSearchQuery("")
-                                        },
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (searchQuery.isNotBlank()) {
+                                        IconButton(
+                                            onClick = {
+                                                searchQuery = ""
+                                                playerViewModel.updateSearchQuery("")
+                                            },
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Close,
+                                                contentDescription = "清空",
+                                                tint = MaterialTheme.colorScheme.primary
                                             )
+                                        }
+                                    }
+                                    FilledTonalButton(
+                                        onClick = submitSearch,
+                                        enabled = searchQuery.isNotBlank(),
+                                        modifier = Modifier.padding(end = 6.dp),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Close,
-                                            contentDescription = "Limpiar",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
+                                        Text("搜索")
                                     }
                                 }
                             },

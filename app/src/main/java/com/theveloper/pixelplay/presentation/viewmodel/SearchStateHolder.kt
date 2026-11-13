@@ -46,7 +46,8 @@ class SearchStateHolder @Inject constructor(
 
     private data class SearchRequest(
         val query: String,
-        val requestId: Long
+        val requestId: Long,
+        val fetchOnline: Boolean
     )
 
     // Search State
@@ -104,6 +105,9 @@ class SearchStateHolder @Inject constructor(
                         if (currentFilter != SearchFilterType.ALL && currentFilter != SearchFilterType.SONGS) {
                             return@collectLatest
                         }
+                        if (!request.fetchOnline) {
+                            return@collectLatest
+                        }
                         val online = runCatching { gdStudioLibrary.search(normalizedQuery) }
                             .getOrDefault(emptyList())
                         if (request.requestId != latestSearchRequestId.get() || online.isEmpty()) {
@@ -159,7 +163,7 @@ class SearchStateHolder @Inject constructor(
         }
     }
 
-    fun performSearch(query: String) {
+    fun performSearch(query: String, fetchOnline: Boolean = false) {
         val normalizedQuery = query.trim()
 
         val requestId = latestSearchRequestId.incrementAndGet()
@@ -170,7 +174,7 @@ class SearchStateHolder @Inject constructor(
             }
         }
 
-        searchRequests.tryEmit(SearchRequest(normalizedQuery, requestId))
+        searchRequests.tryEmit(SearchRequest(normalizedQuery, requestId, fetchOnline && normalizedQuery.isNotBlank()))
     }
 
     fun deleteSearchHistoryItem(query: String) {
