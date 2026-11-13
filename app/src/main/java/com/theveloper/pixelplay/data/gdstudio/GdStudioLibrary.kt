@@ -58,7 +58,27 @@ class GdStudioLibrary @Inject constructor(
             val saved = musicDao.getSongByIdOnce(songId)?.toSong()
             songs += saved ?: remoteSong(track, songId)
         }
-        return songs
+        return attachCovers(songs)
+    }
+
+    private suspend fun attachCovers(songs: List<Song>): List<Song> = coroutineScope {
+        val needed = songs.mapNotNull { song ->
+            if (!song.albumArtUriString.isNullOrBlank()) return@mapNotNull null
+            val ref = GdStudioApi.parseTrackUri(song.contentUriString) ?: return@mapNotNull null
+            val pic = picIdOf(song)
+            if (pic.isBlank()) null else ref.source to pic
+        }.distinct()
+        val covers = needed.map { (source, pic) ->
+            async {
+                (source to pic) to runCatching { repository.coverUrl(source, pic) }.getOrNull()
+            }
+        }.awaitAll().toMap()
+        songs.map { song ->
+            if (!song.albumArtUriString.isNullOrBlank()) return@map song
+            val ref = GdStudioApi.parseTrackUri(song.contentUriString) ?: return@map song
+            val url = covers[ref.source to picIdOf(song)]
+            if (url.isNullOrBlank()) song else song.copy(albumArtUriString = url)
+        }
     }
 
     fun asPlayable(song: Song): Song {
@@ -122,12 +142,15 @@ class GdStudioLibrary @Inject constructor(
         }
         val ref = GdStudioApi.parseTrackUri(playable.contentUriString)
             ?: throw GdStudioException("无法识别这首歌")
-        val streamUrl = repository.streamUrl(ref.source, ref.trackId, ref.br)
-            ?: throw GdStudioException("没有拿到音频地址")
         val directory = File(context.cacheDir, "gdstudio").apply { mkdirs() }
-        val audioFile = File(directory, "$songId${extensionOf(streamUrl, ref.br)}")
-        if (!audioFile.isFile || audioFile.length() == 0L) {
-            download(streamUrl, audioFile)
+        val audioFile = findCachedAudio(songId, ref.br) ?: run {
+            val streamUrl = repository.streamUrl(ref.source, ref.trackId, ref.br)
+                ?: throw GdStudioException("没有拿到音频地址")
+            val created = File(directory, "$songId-${ref.br}${extensionOf(streamUrl, ref.br)}")
+            if (!created.isFile || created.length() == 0L) {
+                download(streamUrl, created)
+            }
+            created
         }
         val coverFile = cacheCover(directory, songId, ref.source, picIdOf(playable))
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
@@ -159,16 +182,43 @@ class GdStudioLibrary @Inject constructor(
         val ref = GdStudioApi.parseTrackUri(playable.contentUriString) ?: return@withContext playable
         val songId = playable.id.toLong()
 
-        val streamUrl = repository.streamUrl(ref.source, ref.trackId, ref.br)
-            ?: throw GdStudioException("没有拿到音频地址")
         val directory = File(context.getExternalFilesDir(null), "gdstudio").apply { mkdirs() }
-        val audioFile = File(directory, "$songId${extensionOf(streamUrl, ref.br)}")
-        download(streamUrl, audioFile)
+        val cachedAudio = findCachedAudio(songId, ref.br)
+        val freshUrl = if (cachedAudio == null) {
+            repository.streamUrl(ref.source, ref.trackId, ref.br)
+                ?: throw GdStudioException("没有拿到音频地址")
+        } else {
+            null
+        }
+        val audioFile = if (cachedAudio != null) {
+            val extension = cachedAudio.extension.ifBlank { "mp3" }
+            File(directory, "$songId.$extension")
+        } else {
+            File(directory, "$songId${extensionOf(freshUrl.orEmpty(), ref.br)}")
+        }
+        if (cachedAudio != null) {
+            if (cachedAudio.absolutePath != audioFile.absolutePath) {
+                cachedAudio.copyTo(audioFile, overwrite = true)
+                cachedAudio.delete()
+            }
+        } else if (!audioFile.isFile || audioFile.length() == 0L) {
+            download(freshUrl.orEmpty(), audioFile)
+        }
 
-        val coverFile = repository.coverUrl(ref.source, picIdOf(playable))?.let { coverUrl ->
-            val file = File(directory, "$songId.jpg")
-            runCatching { download(coverUrl, file) }.getOrNull()
-            file.takeIf { it.exists() && it.length() > 0L }
+        val cachedCover = File(File(context.cacheDir, "gdstudio"), "$songId.jpg")
+        val coverFile = File(directory, "$songId.jpg").let { destination ->
+            if (cachedCover.isFile && cachedCover.length() > 0L) {
+                if (cachedCover.absolutePath != destination.absolutePath) {
+                    cachedCover.copyTo(destination, overwrite = true)
+                    cachedCover.delete()
+                }
+                destination
+            } else {
+                repository.coverUrl(ref.source, picIdOf(playable))?.let { coverUrl ->
+                    runCatching { download(coverUrl, destination) }.getOrNull()
+                }
+                destination.takeIf { it.isFile && it.length() > 0L }
+            }
         }
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
         val duration = readDuration(audioFile)
@@ -253,6 +303,41 @@ class GdStudioLibrary @Inject constructor(
             onSuccess = { file.takeIf { it.isFile && it.length() > 0L } },
             onFailure = { null }
         )
+    }
+
+    private fun findCachedAudio(songId: Long, br: String): File? {
+        val directory = File(context.cacheDir, "gdstudio")
+        val files = directory.listFiles()?.filter { file ->
+            file.isFile && file.length() > 0L && file.extension.lowercase() !in setOf("jpg", "jpeg", "lrc", "txt")
+        }.orEmpty()
+        files.firstOrNull { it.name.startsWith("$songId-$br.") }?.let { return it }
+        return files.firstOrNull { it.name.startsWith("$songId.") && sameCachedQuality(it, br) }
+    }
+
+    private fun sameCachedQuality(file: File, br: String): Boolean {
+        if (file.name.contains("-$br.")) return true
+        val kbps = metadata(file, MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()?.div(1000)
+        val bits = metadata(file, MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
+        return when (br) {
+            "128" -> kbps != null && kbps in 96..160
+            "192" -> kbps != null && kbps in 161..250
+            "320" -> kbps != null && kbps in 251..450
+            "740" -> bits == 16 || (file.extension.equals("flac", true) && bits == null && (kbps ?: 0) > 450)
+            "999" -> bits != null && bits >= 24
+            else -> false
+        }
+    }
+
+    private fun metadata(file: File, key: Int): String? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(key)
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
     }
 
     private fun isLibraryFile(path: String): Boolean {
