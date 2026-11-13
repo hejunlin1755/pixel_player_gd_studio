@@ -152,6 +152,14 @@ fun SearchScreen(
         onSearchBarActiveChange(false)
     }
 
+    LaunchedEffect(playerViewModel.searchQuery) {
+        val incoming = playerViewModel.searchQuery
+        if (incoming.isNotBlank() && incoming != searchQuery) {
+            searchQuery = incoming
+            submittedQuery = incoming
+        }
+    }
+
     LaunchedEffect(playerViewModel, keyboardController) {
         playerViewModel.searchNavDoubleTapEvents.collect {
             delay(40L)

@@ -17,6 +17,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeTopAppBar
@@ -97,6 +98,7 @@ fun HomeGradientTopBar(
     onBetaClick: () -> Unit,
     onTelegramClick: () -> Unit,
     onMenuClick: () -> Unit = {},
+    onIdentifyClick: () -> Unit = {},
 ) {
     // 1) Pinta la status bar con el color surface
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -173,6 +175,18 @@ fun HomeGradientTopBar(
                 //horizontalArrangement = Arrangement.spacedBy(2.dp),
                 modifier = Modifier.padding(end = 14.dp)
             ) {
+                FilledIconButton(
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    onClick = onIdentifyClick
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.GraphicEq,
+                        contentDescription = "听歌识曲"
+                    )
+                }
                 FilledIconButton(
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

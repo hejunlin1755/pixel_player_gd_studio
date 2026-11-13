@@ -2,6 +2,7 @@ package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
 import com.theveloper.pixelplay.presentation.navigation.navigateToTopLevelSafely
+import com.theveloper.pixelplay.presentation.identify.SongIdentifyDialog
 
 import android.content.Intent
 import androidx.activity.compose.ReportDrawnWhen
@@ -199,6 +200,7 @@ fun HomeScreen(
     var showChangelogBottomSheet by remember { mutableStateOf(false) }
     var showBetaInfoBottomSheet by remember { mutableStateOf(false) }
     var showStreamingProviderSheet by remember { mutableStateOf(false) }
+    var showIdentify by remember { mutableStateOf(false) }
     var cleanInstallDisclaimerDismissedThisSession by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val betaSheetState = rememberModalBottomSheetState()
@@ -234,7 +236,8 @@ fun HomeScreen(
                     },
                     onMenuClick = {
                         // onOpenSidebar() // Disabled
-                    }
+                    },
+                    onIdentifyClick = { showIdentify = true }
                 )
             }
         ) { innerPadding ->
@@ -443,6 +446,21 @@ fun HomeScreen(
                 navController.navigateToTopLevelSafely(Screen.Search.route)
                 scope.launch {
                     delay(180)
+                    playerViewModel.onSearchNavIconDoubleTapped()
+                }
+            }
+        )
+    }
+    if (showIdentify) {
+        SongIdentifyDialog(
+            onDismiss = { showIdentify = false },
+            onSearch = { query ->
+                showIdentify = false
+                playerViewModel.updateSearchQuery(query)
+                navController.navigateToTopLevelSafely(Screen.Search.route)
+                scope.launch {
+                    delay(220)
+                    playerViewModel.performSearch(query, fetchOnline = true)
                     playerViewModel.onSearchNavIconDoubleTapped()
                 }
             }
