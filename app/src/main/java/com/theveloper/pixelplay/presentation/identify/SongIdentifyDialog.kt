@@ -87,6 +87,10 @@ fun SongIdentifyDialog(
             viewModel.fail("需要允许录制设备正在播放的声音")
         }
     }
+    fun launchPlayback() {
+        val manager = context.getSystemService(MediaProjectionManager::class.java)
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) viewModel.fail("需要麦克风权限才能听歌识曲")
         else if (pending == IdentifySource.Playback) launchPlayback()
@@ -107,11 +111,6 @@ fun SongIdentifyDialog(
         } else if (phase !is IdentifyPhase.Matching) {
             heard = 0f
         }
-    }
-
-    fun launchPlayback() {
-        val manager = context.getSystemService(MediaProjectionManager::class.java)
-        projectionLauncher.launch(manager.createScreenCaptureIntent())
     }
 
     fun begin(source: IdentifySource) {
