@@ -188,12 +188,16 @@ class GdStudioRepository @Inject constructor(
                 while (requestTimes.isNotEmpty() && now - requestTimes.first() >= WINDOW_MS) {
                     requestTimes.removeFirst()
                 }
-                if (requestTimes.size < MAX_REQUESTS) {
-                    requestTimes.addLast(now)
-                    0L
-                } else {
-                    (WINDOW_MS - (now - requestTimes.first()) + 200L).coerceAtLeast(200L)
+            if (requestTimes.size < MAX_REQUESTS) {
+                requestTimes.addLast(now)
+                0L
+            } else {
+                val waitMs = (WINDOW_MS - (now - requestTimes.first()) + 200L).coerceAtLeast(200L)
+                if (waitMs > 1_500L) {
+                    throw GdStudioException("请求太频繁，请稍后再试")
                 }
+                waitMs
+            }
             }
             if (waitMs == 0L) return
             delay(waitMs)

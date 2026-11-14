@@ -8,10 +8,16 @@ import com.theveloper.pixelplay.data.repository.MusicRepository
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,8 +25,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -107,49 +111,71 @@ class SearchStateHolder @Inject constructor(
 
                     try {
                         val currentFilter = _selectedSearchFilter.value
-                        val local = withContext(Dispatchers.IO) {
-                            musicRepository.searchAll(normalizedQuery, currentFilter).first()
-                        }.sortedWith(
-                            compareBy { result ->
-                                when (result) {
-                                    is SearchResultItem.SongItem -> 0
-                                    is SearchResultItem.AlbumItem -> 1
-                                    is SearchResultItem.ArtistItem -> 2
-                                    is SearchResultItem.PlaylistItem -> 3
+                        coroutineScope {
+                            val localDeferred = async {
+                                withContext(Dispatchers.IO) {
+                                    musicRepository.searchAll(normalizedQuery, currentFilter).first()
+                                }.sortedWith(
+                                    compareBy { result ->
+                                        when (result) {
+                                            is SearchResultItem.SongItem -> 0
+                                            is SearchResultItem.AlbumItem -> 1
+                                            is SearchResultItem.ArtistItem -> 2
+                                            is SearchResultItem.PlaylistItem -> 3
+                                        }
+                                    }
+                                )
+                            }
+                            val fetchesOnline = request.fetchOnline &&
+                                (currentFilter == SearchFilterType.ALL || currentFilter == SearchFilterType.SONGS)
+                            val onlineDeferred = if (fetchesOnline) {
+                                async {
+                                    withTimeout(20_000) { gdStudioLibrary.search(normalizedQuery) }
                                 }
+                            } else {
+                                null
                             }
-                        )
-                        if (request.requestId != latestSearchRequestId.get()) return@collectLatest
-                        _searchResults.value = local.toImmutableList()
-
-                        val fetchesOnline = request.fetchOnline &&
-                            (currentFilter == SearchFilterType.ALL || currentFilter == SearchFilterType.SONGS)
-                        if (!fetchesOnline) {
+                            val local = try {
+                                withTimeout(8_000) { localDeferred.await() }
+                            } catch (_: TimeoutCancellationException) {
+                                localDeferred.cancel()
+                                emptyList()
+                            }
+                            if (request.requestId != latestSearchRequestId.get()) return@coroutineScope
+                            _searchResults.value = local.toImmutableList()
+                            if (onlineDeferred == null) {
+                                _searchStatus.value = SearchStatus.Ready
+                                return@coroutineScope
+                            }
+                            val online = try {
+                                onlineDeferred.await()
+                            } catch (error: TimeoutCancellationException) {
+                                if (request.requestId == latestSearchRequestId.get()) {
+                                    Timber.e(error, "Online search timed out for query: $normalizedQuery")
+                                    _searchStatus.value = SearchStatus.Failed
+                                }
+                                return@coroutineScope
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                if (request.requestId == latestSearchRequestId.get()) {
+                                    Timber.e(error, "Online search failed for query: $normalizedQuery")
+                                    _searchStatus.value = SearchStatus.Failed
+                                }
+                                return@coroutineScope
+                            }
+                            if (request.requestId != latestSearchRequestId.get()) return@coroutineScope
+                            if (online.isNotEmpty()) {
+                                val seen = local.mapNotNull { item ->
+                                    (item as? SearchResultItem.SongItem)?.song?.id
+                                }.toSet()
+                                val merged = local + online
+                                    .filter { it.id !in seen }
+                                    .map { SearchResultItem.SongItem(it) }
+                                _searchResults.value = merged.toImmutableList()
+                            }
                             _searchStatus.value = SearchStatus.Ready
-                            return@collectLatest
                         }
-                        val online = try {
-                            gdStudioLibrary.search(normalizedQuery)
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (error: Exception) {
-                            if (request.requestId == latestSearchRequestId.get()) {
-                                Timber.e(error, "Online search failed for query: $normalizedQuery")
-                                _searchStatus.value = SearchStatus.Failed
-                            }
-                            return@collectLatest
-                        }
-                        if (request.requestId != latestSearchRequestId.get()) return@collectLatest
-                        if (online.isNotEmpty()) {
-                            val seen = local.mapNotNull { item ->
-                                (item as? SearchResultItem.SongItem)?.song?.id
-                            }.toSet()
-                            val merged = local + online
-                                .filter { it.id !in seen }
-                                .map { SearchResultItem.SongItem(it) }
-                            _searchResults.value = merged.toImmutableList()
-                        }
-                        _searchStatus.value = SearchStatus.Ready
                     } catch (_: CancellationException) {
                         // Superseded by a newer query; ignore.
                     } catch (e: Exception) {
