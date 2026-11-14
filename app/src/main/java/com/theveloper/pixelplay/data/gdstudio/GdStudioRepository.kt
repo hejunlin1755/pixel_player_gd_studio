@@ -8,9 +8,11 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.URLEncoder
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.zip.CRC32
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,6 +21,23 @@ class GdStudioRepository @Inject constructor(
     okHttpClient: OkHttpClient
 ) {
     private val client = okHttpClient.newBuilder()
+        .addInterceptor { chain ->
+            val request = chain.request()
+            if (!request.url.host.contains("gdstudio")) {
+                chain.proceed(request)
+            } else {
+                chain.proceed(
+                    request.newBuilder()
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                        )
+                        .header("Referer", "https://music.gdstudio.org/")
+                        .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                        .build()
+                )
+            }
+        }
         .callTimeout(12, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
@@ -105,8 +124,21 @@ class GdStudioRepository @Inject constructor(
     }
 
     private suspend fun get(query: Map<String, String>): String {
-        awaitSlot()
-        val url = GdStudioApi.BASE.toHttpUrl().newBuilder().apply {
+        val signed = signLikeWebsite(query)
+        var last: Exception? = null
+        for (base in GdStudioApi.endpoints) {
+            awaitSlot()
+            try {
+                return fetch(base, signed)
+            } catch (error: Exception) {
+                last = error
+            }
+        }
+        throw last ?: GdStudioException("GD音乐台请求失败")
+    }
+
+    private fun fetch(base: String, query: Map<String, String>): String {
+        val url = base.toHttpUrl().newBuilder().apply {
             query.forEach { (key, value) -> addQueryParameter(key, value) }
         }.build()
         val request = Request.Builder().url(url).get().build()
@@ -117,6 +149,24 @@ class GdStudioRepository @Inject constructor(
             }
             return body
         }
+    }
+
+    private fun signLikeWebsite(query: Map<String, String>): Map<String, String> {
+        if (query.containsKey("s")) return query
+        val raw = query["id"] ?: query["name"] ?: return query
+        return query + ("s" to crc32(encodeUriComponent(raw)).toString())
+    }
+
+    private fun encodeUriComponent(value: String): String {
+        return URLEncoder.encode(value, Charsets.UTF_8)
+            .replace("+", "%20")
+            .replace("*", "%2A")
+    }
+
+    private fun crc32(value: String): Long {
+        val crc = CRC32()
+        crc.update(value.toByteArray(Charsets.UTF_8))
+        return crc.value
     }
 
     private suspend fun awaitSlot() {

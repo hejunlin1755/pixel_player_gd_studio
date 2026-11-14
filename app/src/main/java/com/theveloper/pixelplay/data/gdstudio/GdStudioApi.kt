@@ -10,7 +10,15 @@ import org.json.JSONObject
  * Credit: GD音乐台(music.gdstudio.xyz).
  */
 object GdStudioApi {
-    const val BASE = "https://music-api.gdstudio.xyz/api.php"
+    const val BASE = "https://music.gdstudio.org/api.php"
+    val endpoints = listOf(
+        "https://music.gdstudio.org/api.php",
+        "https://music.gdstudio.xyz/api.php",
+        "https://music-api.gdstudio.xyz/api.php",
+        "https://music-api-cn.gdstudio.xyz/api.php",
+        "https://music-api-hk.gdstudio.xyz/api.php",
+        "https://music-api-us.gdstudio.xyz/api.php"
+    )
     const val ATTRIBUTION = "GD音乐台(music.gdstudio.xyz)"
     const val SCHEME = "gdstudio"
 

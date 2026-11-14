@@ -1,7 +1,9 @@
 package com.theveloper.pixelplay.presentation.identify
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,12 +51,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -63,6 +64,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.theveloper.pixelplay.data.identify.IdentifySource
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import kotlinx.coroutines.delay
 
@@ -76,9 +78,19 @@ fun SongIdentifyDialog(
     val level by viewModel.level.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var heard by remember { mutableFloatStateOf(0f) }
+    var pending by remember { mutableStateOf(IdentifySource.Microphone) }
+    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            viewModel.listenPlayback(result.resultCode, data)
+        } else {
+            viewModel.fail("需要允许录制设备正在播放的声音")
+        }
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) viewModel.listenMicrophone()
-        else viewModel.fail("需要麦克风权限才能听歌识曲")
+        if (!granted) viewModel.fail("需要麦克风权限才能听歌识曲")
+        else if (pending == IdentifySource.Playback) launchPlayback()
+        else viewModel.listenMicrophone()
     }
     DisposableEffect(viewModel) {
         onDispose { viewModel.stop() }
@@ -97,11 +109,22 @@ fun SongIdentifyDialog(
         }
     }
 
-    fun begin() {
+    fun launchPlayback() {
+        val manager = context.getSystemService(MediaProjectionManager::class.java)
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
+    fun begin(source: IdentifySource) {
+        pending = source
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-        if (granted) viewModel.listenMicrophone()
-        else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        if (!granted) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else if (source == IdentifySource.Playback) {
+            launchPlayback()
+        } else {
+            viewModel.listenMicrophone()
+        }
     }
 
     Dialog(
@@ -127,7 +150,7 @@ fun SongIdentifyDialog(
                     }
                 }
                 Text(
-                    text = "对着外面的歌录一段，发给免费的在线识别服务。不比对手机里已经有的歌。",
+                    text = "可以听周围的声音，也可以听手机里正在放的声音。录好后发给免费的在线识别服务。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -149,8 +172,11 @@ fun SongIdentifyDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             text = when (current) {
-                                IdentifyPhase.Ready -> "点下面开始听"
-                                is IdentifyPhase.Listening -> "正在听，圆环会跟着转"
+                                IdentifyPhase.Ready -> "选一种方式开始听"
+                                is IdentifyPhase.Listening -> when (current.source) {
+                                    IdentifySource.Microphone -> "正在听周围的声音"
+                                    IdentifySource.Playback -> "正在听设备里正在放的声音"
+                                }
                                 IdentifyPhase.Matching -> "正在发给在线识别"
                                 is IdentifyPhase.Found -> "在线认出来了"
                                 is IdentifyPhase.Failed -> current.message
@@ -169,9 +195,14 @@ fun SongIdentifyDialog(
                             FoundCard(phase = current, onSearch = onSearch)
                         }
                         if (current !is IdentifyPhase.Listening && current !is IdentifyPhase.Matching && current !is IdentifyPhase.Found) {
-                            Button(onClick = { begin() }) {
-                                Icon(Icons.Rounded.Mic, contentDescription = null)
-                                Text("开始听", modifier = Modifier.padding(start = 8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(onClick = { begin(IdentifySource.Microphone) }) {
+                                    Icon(Icons.Rounded.Mic, contentDescription = null)
+                                    Text("麦克风", modifier = Modifier.padding(start = 8.dp))
+                                }
+                                FilledTonalButton(onClick = { begin(IdentifySource.Playback) }) {
+                                    Text("设备播放")
+                                }
                             }
                         }
                     }
@@ -245,12 +276,6 @@ private fun IdentifyVisualizer(
         animationSpec = infiniteRepeatable(tween(1700, delayMillis = 1120, easing = LinearOutSlowInEasing)),
         label = "ring_c"
     )
-    val breathe by transition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(tween(if (busy) 700 else 1400), repeatMode = RepeatMode.Reverse),
-        label = "breathe"
-    )
     val bars = List(9) { index ->
         transition.animateFloat(
             initialValue = 0.18f,
@@ -274,20 +299,15 @@ private fun IdentifyVisualizer(
         verticalArrangement = Arrangement.Center
     ) {
         Box(contentAlignment = Alignment.Center) {
-            androidx.compose.foundation.Canvas(
-                modifier = Modifier
-                    .size(280.dp)
-                    .graphicsLayer {
-                        scaleX = breathe
-                        scaleY = breathe
-                    }
-            ) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.size(280.dp)) {
                 val center = this.center
-                val hole = 96.dp.toPx()
+                val radius = size.minDimension / 2f - 16.dp.toPx()
+                val arcTop = Offset(center.x - radius, center.y - radius)
+                val arcSize = Size(radius * 2f, radius * 2f)
                 fun pulse(amount: Float, color: Color) {
                     drawCircle(
                         color = color.copy(alpha = (1f - amount) * if (busy) 0.9f else 0.45f),
-                        radius = hole / 2f + size.minDimension * 0.34f * amount,
+                        radius = 48.dp.toPx() + (radius - 48.dp.toPx()) * amount,
                         center = center,
                         style = Stroke(width = 5.dp.toPx())
                     )
@@ -295,14 +315,20 @@ private fun IdentifyVisualizer(
                 pulse(ringProgress, primary)
                 pulse(ringProgressB, tertiary)
                 pulse(ringProgressC, primary)
-                rotate(spin, center) {
+                drawCircle(
+                    color = primary.copy(alpha = 0.28f),
+                    radius = radius,
+                    center = center,
+                    style = Stroke(width = 6.dp.toPx())
+                )
+                rotate(degrees = spin, pivot = center) {
                     drawArc(
-                        brush = Brush.sweepGradient(listOf(Color.Transparent, primary, tertiary, Color.Transparent)),
-                        startAngle = 0f,
-                        sweepAngle = 300f,
+                        color = primary,
+                        startAngle = -90f,
+                        sweepAngle = 72f,
                         useCenter = false,
-                        topLeft = Offset(center.x - hole * 0.72f, center.y - hole * 0.72f),
-                        size = Size(hole * 1.44f, hole * 1.44f),
+                        topLeft = arcTop,
+                        size = arcSize,
                         style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
                     )
                 }
@@ -312,8 +338,8 @@ private fun IdentifyVisualizer(
                         startAngle = -90f,
                         sweepAngle = 360f * progress,
                         useCenter = false,
-                        topLeft = Offset(18.dp.toPx(), 18.dp.toPx()),
-                        size = Size(size.width - 36.dp.toPx(), size.height - 36.dp.toPx()),
+                        topLeft = arcTop,
+                        size = arcSize,
                         style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
                     )
                 }
