@@ -10,11 +10,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.net.URLEncoder
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.zip.CRC32
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -81,17 +79,23 @@ class GdStudioRepository @Inject constructor(
         streamCache[cacheKey]?.let { cached ->
             if (System.currentTimeMillis() - cached.at < STREAM_CACHE_MS) return@withContext cached.url
         }
-        val body = get(
-            mapOf(
-                "types" to "url",
-                "source" to stable,
-                "id" to trackId,
-                "br" to quality
+        val fallbacks = listOf(quality, "320", "192", "128").distinct()
+        for (br in fallbacks) {
+            val body = get(
+                mapOf(
+                    "types" to "url",
+                    "source" to stable,
+                    "id" to trackId,
+                    "br" to br
+                )
             )
-        )
-        GdStudioApi.parseUrl(body)?.url?.also { url ->
-            streamCache[cacheKey] = CachedStream(url, System.currentTimeMillis())
+            val url = GdStudioApi.parseUrl(body)?.url
+            if (!url.isNullOrBlank()) {
+                streamCache[cacheKey] = CachedStream(url, System.currentTimeMillis())
+                return@withContext url
+            }
         }
+        null
     }
 
     suspend fun coverUrl(source: String, picId: String, size: String = "300"): String? = withContext(Dispatchers.IO) {
@@ -124,24 +128,28 @@ class GdStudioRepository @Inject constructor(
     }
 
     private suspend fun get(query: Map<String, String>): String {
-        val signed = signLikeWebsite(query)
         var last: Exception? = null
-        var challenge: String? = null
+        var sawChallenge = false
         for (base in GdStudioApi.endpoints) {
             awaitSlot()
             try {
-                return fetch(base, signed)
-            } catch (error: HumanCheckException) {
-                challenge = error.url
-                break
+                return fetch(base, query)
+            } catch (_: HumanCheckException) {
+                sawChallenge = true
             } catch (error: Exception) {
                 last = error
             }
         }
-        if (challenge != null) {
-            val body = webGate.open(challenge)
-            if (GdStudioApi.looksLikePayload(body)) return body
-            throw GdStudioException("人机验证没有通过")
+        if (sawChallenge) {
+            webGate.awaitClearance()
+            for (base in GdStudioApi.endpoints) {
+                awaitSlot()
+                try {
+                    return fetch(base, query)
+                } catch (error: Exception) {
+                    last = error
+                }
+            }
         }
         throw last ?: GdStudioException("GD音乐台请求失败")
     }
@@ -164,32 +172,13 @@ class GdStudioRepository @Inject constructor(
     }
 
     private fun isHumanCheck(response: Response, body: String): Boolean {
+        if (GdStudioApi.looksLikePayload(body)) return false
+        if (body.contains("503 Service Temporarily Unavailable")) return false
+        if (body.contains("Invalid request")) return false
         if (response.header("cf-mitigated") != null) return true
-        val sample = body.take(8000)
-        return sample.contains("cdn-cgi/challenge", ignoreCase = true) ||
-            sample.contains("cf-turnstile", ignoreCase = true) ||
-            sample.contains("challenge-platform", ignoreCase = true) ||
-            sample.contains("Just a moment", ignoreCase = true) ||
-            sample.contains("challenges.cloudflare.com", ignoreCase = true) ||
-            sample.contains("请完成以下操作")
-    }
-
-    private fun signLikeWebsite(query: Map<String, String>): Map<String, String> {
-        if (query.containsKey("s")) return query
-        val raw = query["id"] ?: query["name"] ?: return query
-        return query + ("s" to crc32(encodeUriComponent(raw)).toString())
-    }
-
-    private fun encodeUriComponent(value: String): String {
-        return URLEncoder.encode(value, Charsets.UTF_8)
-            .replace("+", "%20")
-            .replace("*", "%2A")
-    }
-
-    private fun crc32(value: String): Long {
-        val crc = CRC32()
-        crc.update(value.toByteArray(Charsets.UTF_8))
-        return crc.value
+        return body.contains("Just a moment", ignoreCase = true) ||
+            body.contains("cf-turnstile", ignoreCase = true) ||
+            body.contains("请完成以下操作")
     }
 
     private suspend fun awaitSlot() {

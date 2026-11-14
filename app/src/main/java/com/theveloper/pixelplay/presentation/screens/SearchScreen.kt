@@ -664,21 +664,18 @@ fun EmptySearchResults(
     ) {
         if (searching) {
             CircularProgressIndicator(
-                modifier = Modifier
-                    .size(48.dp)
-                    .padding(bottom = 16.dp),
+                modifier = Modifier.size(48.dp),
                 color = colorScheme.primary
             )
         } else {
             Icon(
                 imageVector = Icons.Rounded.Search,
                 contentDescription = null,
-                modifier = Modifier
-                    .size(80.dp)
-                    .padding(bottom = 16.dp),
+                modifier = Modifier.size(64.dp),
                 tint = if (failed) colorScheme.error else colorScheme.primary.copy(alpha = 0.6f)
             )
         }
+        Spacer(modifier = Modifier.height(16.dp))
 
         Text(
             text = when {

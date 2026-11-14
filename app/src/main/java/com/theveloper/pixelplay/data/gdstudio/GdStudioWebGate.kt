@@ -17,12 +17,12 @@ class GdStudioWebGate @Inject constructor() {
     private val lock = Mutex()
     private val _prompt = MutableStateFlow<Prompt?>(null)
     val prompt: StateFlow<Prompt?> = _prompt.asStateFlow()
-    private var result: CompletableDeferred<String>? = null
+    private var result: CompletableDeferred<Unit>? = null
 
-    suspend fun open(url: String): String = lock.withLock {
-        val deferred = CompletableDeferred<String>()
+    suspend fun awaitClearance() = lock.withLock {
+        val deferred = CompletableDeferred<Unit>()
         result = deferred
-        _prompt.value = Prompt(url, System.nanoTime())
+        _prompt.value = Prompt(GdStudioApi.SITE, System.nanoTime())
         try {
             withTimeout(180_000) { deferred.await() }
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
@@ -33,11 +33,9 @@ class GdStudioWebGate @Inject constructor() {
         }
     }
 
-    fun submit(body: String) {
+    fun finished() {
         val waiter = result ?: return
-        if (!waiter.isCompleted && GdStudioApi.looksLikePayload(body)) {
-            waiter.complete(body)
-        }
+        if (!waiter.isCompleted) waiter.complete(Unit)
     }
 
     fun cancel() {
