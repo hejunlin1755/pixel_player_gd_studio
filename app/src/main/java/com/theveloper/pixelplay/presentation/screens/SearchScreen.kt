@@ -369,48 +369,19 @@ fun SearchScreen(
                                     )
                                 },
                                 trailingIcon = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (searchQuery.isNotBlank()) {
-                                            IconButton(
-                                                onClick = {
-                                                    if (searchUiState.searchStatus == SearchStatus.Searching) return@IconButton
-                                                    playerViewModel.onSearchQuerySubmitted(searchQuery)
-                                                    playerViewModel.performSearch(searchQuery, fetchOnline = true)
-                                                    keyboardController?.hide()
-                                                },
-                                                modifier = Modifier.size(48.dp)
-                                            ) {
-                                                if (searchUiState.searchStatus == SearchStatus.Searching) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(22.dp),
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                } else {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.Search,
-                                                        contentDescription = "搜索",
-                                                        tint = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    searchQuery = ""
-                                                    playerViewModel.updateSearchQuery("")
-                                                },
-                                                modifier = Modifier
-                                                    .size(48.dp)
-                                                    .clip(CircleShape)
-                                                    .background(
-                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
-                                                    )
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.Close,
-                                                    contentDescription = stringResource(R.string.search_cd_clear_search_query),
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
+                                    if (searchQuery.isNotBlank()) {
+                                        IconButton(
+                                            onClick = {
+                                                searchQuery = ""
+                                                playerViewModel.updateSearchQuery("")
+                                            },
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Close,
+                                                contentDescription = stringResource(R.string.search_cd_clear_search_query),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
                                         }
                                     }
                                 },
@@ -432,16 +403,28 @@ fun SearchScreen(
 
                 FilledIconButton(
                     modifier = Modifier.padding(bottom = 2.dp),
+                    enabled = searchQuery.isNotBlank() && searchUiState.searchStatus != SearchStatus.Searching,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ),
-                    onClick = { navController.navigateSafely(Screen.Settings.route) }
+                    onClick = {
+                        playerViewModel.onSearchQuerySubmitted(searchQuery)
+                        playerViewModel.performSearch(searchQuery, fetchOnline = true)
+                        keyboardController?.hide()
+                    }
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.rounded_settings_24),
-                        contentDescription = stringResource(R.string.library_cd_open_settings)
-                    )
+                    if (searchUiState.searchStatus == SearchStatus.Searching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = "搜索"
+                        )
+                    }
                 }
             }
 
@@ -526,6 +509,21 @@ fun SearchScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp)
                     ) {
+                        when (searchUiState.searchStatus) {
+                            SearchStatus.Searching -> Text(
+                                text = "正在搜索在线歌曲",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            SearchStatus.Failed -> Text(
+                                text = "在线搜索失败，本地结果仍可用",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            else -> Unit
+                        }
                         if (anySelectionMode) {
                             val count = when {
                                 isSongSelectionMode -> selectedSongs.size
@@ -1100,7 +1098,11 @@ fun EmptySearchResults(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = stringResource(R.string.search_try_different_or_filters),
+            text = when (searchStatus) {
+                SearchStatus.Searching -> "正在查询 GD音乐台，请稍等"
+                SearchStatus.Failed -> "在线结果没有拿到，再点一次右边的搜索"
+                else -> stringResource(R.string.search_try_different_or_filters)
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             textAlign = TextAlign.Center

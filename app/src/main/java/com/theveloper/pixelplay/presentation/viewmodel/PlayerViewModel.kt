@@ -718,7 +718,24 @@ class PlayerViewModel @Inject constructor(
         song: Song,
         queueName: String = "Liked Songs",
         isVoluntaryPlay: Boolean = true
-    ) = playbackDispatchStateHolder.showAndPlaySongFromFavorites(song, queueName, isVoluntaryPlay)
+    ) {
+        if (song.contentUriString.startsWith("gdstudio:") && !isGdCached(song)) {
+            viewModelScope.launch {
+                _toastEvents.emit("正在缓存")
+                val ready = try {
+                    gdStudioLibrary.ensureCached(song)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    _toastEvents.emit(error.message ?: "缓存失败")
+                    return@launch
+                }
+                playbackDispatchStateHolder.showAndPlaySongFromFavorites(ready, queueName, isVoluntaryPlay)
+            }
+            return
+        }
+        playbackDispatchStateHolder.showAndPlaySongFromFavorites(song, queueName, isVoluntaryPlay)
+    }
 
     suspend fun getSongsForCurrentLibrarySelection(): List<Song> =
         playbackDispatchStateHolder.getSongsForCurrentLibrarySelection()
