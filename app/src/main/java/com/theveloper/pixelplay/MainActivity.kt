@@ -105,6 +105,7 @@ import com.theveloper.pixelplay.data.worker.SyncProgress
 import com.theveloper.pixelplay.presentation.components.AllFilesAccessDialog
 import com.theveloper.pixelplay.presentation.components.AppSidebarDrawer
 import com.theveloper.pixelplay.presentation.components.CrashReportDialog
+import com.theveloper.pixelplay.presentation.gdstudio.GdStudioChallengeHost
 import com.theveloper.pixelplay.presentation.components.DismissUndoBar
 import com.theveloper.pixelplay.presentation.components.DrawerDestination
 import com.theveloper.pixelplay.presentation.components.MiniPlayerBottomSpacer
@@ -314,6 +315,7 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+                    GdStudioChallengeHost()
                 }
             }
         }

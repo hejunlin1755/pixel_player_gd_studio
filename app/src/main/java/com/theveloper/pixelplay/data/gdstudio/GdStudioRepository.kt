@@ -5,9 +5,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.webkit.CookieManager
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.net.URLEncoder
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
@@ -18,7 +20,8 @@ import javax.inject.Singleton
 
 @Singleton
 class GdStudioRepository @Inject constructor(
-    okHttpClient: OkHttpClient
+    okHttpClient: OkHttpClient,
+    private val webGate: GdStudioWebGate
 ) {
     private val client = okHttpClient.newBuilder()
         .addInterceptor { chain ->
@@ -26,16 +29,13 @@ class GdStudioRepository @Inject constructor(
             if (!request.url.host.contains("gdstudio")) {
                 chain.proceed(request)
             } else {
-                chain.proceed(
-                    request.newBuilder()
-                        .header(
-                            "User-Agent",
-                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-                        )
-                        .header("Referer", "https://music.gdstudio.org/")
-                        .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                        .build()
-                )
+                val next = request.newBuilder()
+                    .header("User-Agent", GdStudioApi.WEB_UA)
+                    .header("Referer", "https://music.gdstudio.org/")
+                    .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                val cookie = runCatching { CookieManager.getInstance().getCookie(request.url.toString()) }.getOrNull()
+                if (!cookie.isNullOrBlank()) next.header("Cookie", cookie)
+                chain.proceed(next.build())
             }
         }
         .callTimeout(12, TimeUnit.SECONDS)
@@ -126,13 +126,22 @@ class GdStudioRepository @Inject constructor(
     private suspend fun get(query: Map<String, String>): String {
         val signed = signLikeWebsite(query)
         var last: Exception? = null
+        var challenge: String? = null
         for (base in GdStudioApi.endpoints) {
             awaitSlot()
             try {
                 return fetch(base, signed)
+            } catch (error: HumanCheckException) {
+                challenge = error.url
+                break
             } catch (error: Exception) {
                 last = error
             }
+        }
+        if (challenge != null) {
+            val body = webGate.open(challenge)
+            if (GdStudioApi.looksLikePayload(body)) return body
+            throw GdStudioException("人机验证没有通过")
         }
         throw last ?: GdStudioException("GD音乐台请求失败")
     }
@@ -144,11 +153,25 @@ class GdStudioRepository @Inject constructor(
         val request = Request.Builder().url(url).get().build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
+            if (isHumanCheck(response, body)) {
+                throw HumanCheckException(url.toString())
+            }
             if (!response.isSuccessful) {
                 throw GdStudioException("GD音乐台请求失败（${response.code}）")
             }
             return body
         }
+    }
+
+    private fun isHumanCheck(response: Response, body: String): Boolean {
+        if (response.header("cf-mitigated") != null) return true
+        val sample = body.take(8000)
+        return sample.contains("cdn-cgi/challenge", ignoreCase = true) ||
+            sample.contains("cf-turnstile", ignoreCase = true) ||
+            sample.contains("challenge-platform", ignoreCase = true) ||
+            sample.contains("Just a moment", ignoreCase = true) ||
+            sample.contains("challenges.cloudflare.com", ignoreCase = true) ||
+            sample.contains("请完成以下操作")
     }
 
     private fun signLikeWebsite(query: Map<String, String>): Map<String, String> {

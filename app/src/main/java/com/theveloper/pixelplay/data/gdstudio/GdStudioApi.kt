@@ -11,6 +11,8 @@ import org.json.JSONObject
  */
 object GdStudioApi {
     const val BASE = "https://music.gdstudio.org/api.php"
+    const val WEB_UA =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     val endpoints = listOf(
         "https://music.gdstudio.org/api.php",
         "https://music.gdstudio.xyz/api.php",
@@ -24,6 +26,11 @@ object GdStudioApi {
 
     val stableSources = listOf("netease", "joox", "bilibili")
     val qualities = listOf("128", "192", "320", "740", "999")
+
+    fun looksLikePayload(body: String): Boolean {
+        val trimmed = body.trim()
+        return trimmed.startsWith("{") || trimmed.startsWith("[")
+    }
 
     fun playbackSource(source: String): String = source.removeSuffix("_album")
 
@@ -186,3 +193,5 @@ data class StreamLink(
 )
 
 class GdStudioException(message: String) : Exception(message)
+
+internal class HumanCheckException(val url: String) : Exception("需要人机验证")
