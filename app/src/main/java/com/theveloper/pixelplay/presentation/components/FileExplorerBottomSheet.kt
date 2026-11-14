@@ -55,9 +55,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -82,12 +82,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextGeometricTransform
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.theveloper.pixelplay.presentation.screens.TabAnimation
 import com.theveloper.pixelplay.presentation.viewmodel.DirectoryEntry
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.utils.StorageInfo
 import java.io.File
 
@@ -100,6 +103,9 @@ fun FileExplorerDialog(
     availableStorages: List<StorageInfo>,
     selectedStorageIndex: Int,
     isLoading: Boolean,
+    isPriming: Boolean = false,
+    isReady: Boolean = true,
+    isCurrentDirectoryResolved: Boolean = true,
     isAtRoot: Boolean,
     rootDirectory: File,
     onNavigateTo: (File) -> Unit,
@@ -144,6 +150,9 @@ fun FileExplorerDialog(
                         availableStorages = availableStorages,
                         selectedStorageIndex = selectedStorageIndex,
                         isLoading = isLoading,
+                        isPriming = isPriming,
+                        isReady = isReady,
+                        isCurrentDirectoryResolved = isCurrentDirectoryResolved,
                         isAtRoot = isAtRoot,
                         rootDirectory = rootDirectory,
                         onNavigateTo = onNavigateTo,
@@ -170,6 +179,9 @@ fun FileExplorerContent(
     availableStorages: List<StorageInfo>,
     selectedStorageIndex: Int,
     isLoading: Boolean,
+    isPriming: Boolean,
+    isReady: Boolean,
+    isCurrentDirectoryResolved: Boolean,
     isAtRoot: Boolean,
     rootDirectory: File,
     onNavigateTo: (File) -> Unit,
@@ -190,6 +202,31 @@ fun FileExplorerContent(
             0
         } else {
             selectedStorageIndex.coerceIn(0, availableStorages.lastIndex)
+        }
+    }
+    val showLoadingState = remember(
+        directoryChildren,
+        isLoading,
+        isPriming,
+        isReady,
+        isCurrentDirectoryResolved
+    ) {
+        directoryChildren.isEmpty() && (
+            isLoading || isPriming || !isReady || !isCurrentDirectoryResolved
+        )
+    }
+    val loadingMessage = remember(isPriming, isReady) {
+        if (isPriming || !isReady) {
+            "Preparing folders…"
+        } else {
+            "Loading folders…"
+        }
+    }
+    val loadingHint = remember(isPriming, isReady) {
+        if (isPriming || !isReady) {
+            "This can take a moment while PixelPlay scans the available subfolders."
+        } else {
+            null
         }
     }
 
@@ -220,7 +257,7 @@ fun FileExplorerContent(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Close"
+                            contentDescription = stringResource(R.string.common_close)
                         )
                     }
                 },
@@ -235,7 +272,7 @@ fun FileExplorerContent(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = "Refresh"
+                            contentDescription = stringResource(R.string.file_explorer_cd_refresh)
                         )
                     }
                 }
@@ -252,11 +289,11 @@ fun FileExplorerContent(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Done,
-                    contentDescription = "Done",
+                    contentDescription = stringResource(R.string.common_done),
                     tint = MaterialTheme.colorScheme.onTertiaryContainer
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Text(text = "Done")
+                Text(text = stringResource(R.string.common_done))
             }
         }
     ) { innerPadding ->
@@ -304,7 +341,7 @@ fun FileExplorerContent(
             }
 
             Text(
-                text = "Everything is allowed by default. Tap a folder to mark it as excluded from scans.",
+                text = stringResource(R.string.file_explorer_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -329,16 +366,23 @@ fun FileExplorerContent(
                     .padding(horizontal = 18.dp)
             ) {
                 AnimatedContent(
-                    targetState = Triple(currentPath, directoryChildren, isLoading),
+                    targetState = Triple(
+                        currentPath,
+                        directoryChildren,
+                        listOf(isLoading, isPriming, isReady, isCurrentDirectoryResolved)
+                    ),
                     label = "directory_content",
                     transitionSpec = {
                         fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(200))
                     }
-                ) { (_, children, loading) ->
+                ) { (_, children, _) ->
                     when {
-                        loading -> ExplorerLoadingState()
+                        showLoadingState -> ExplorerLoadingState(
+                            message = loadingMessage,
+                            supportingText = loadingHint
+                        )
 
-                        children.isEmpty() -> ExplorerEmptyState(text = "No subfolders here")
+                        children.isEmpty() -> ExplorerEmptyState(text = stringResource(R.string.file_explorer_empty_folders))
 
                         else -> {
                             LazyColumn(
@@ -353,7 +397,7 @@ fun FileExplorerContent(
                                     ),
                                 contentPadding = PaddingValues(
                                     bottom = 24.dp,
-                                    end = if (listState.canScrollForward || listState.canScrollBackward) 24.dp else 0.dp
+                                    end = if (LocalShowScrollbar.current && (listState.canScrollForward || listState.canScrollBackward)) 24.dp else 0.dp
                                 ),
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                                 state = listState
@@ -434,7 +478,10 @@ private fun ExplorerEmptyState(
 }
 
 @Composable
-private fun ExplorerLoadingState() {
+private fun ExplorerLoadingState(
+    message: String,
+    supportingText: String? = null
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -445,11 +492,20 @@ private fun ExplorerLoadingState() {
         ContainedLoadingIndicator()
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Loading folders…",
+            text = message,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
+        if (supportingText != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -535,9 +591,13 @@ private fun FileExplorerItem(
                     .background(badgeColor.copy(alpha = 0.16f))
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             ) {
-                val displayCount = if (audioCount > 99) "99+" else audioCount.toString()
                 Text(
-                    text = if (audioCount == 1) "1 song" else "$displayCount songs",
+                    text = when {
+                        audioCount < 0 -> "Scanning..."
+                        audioCount == 1 -> "1 song"
+                        audioCount > 99 -> "99+ songs"
+                        else -> "$audioCount songs"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = badgeColor,
                     maxLines = 1,
@@ -547,33 +607,33 @@ private fun FileExplorerItem(
         }
 
         if (navigationEnabled) {
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                tint = contentColor
-            )
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(contentColor.copy(alpha = 0.08f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         } else {
             Spacer(modifier = Modifier.width(8.dp))
         }
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = if (isBlocked) "Excluded" else "Included",
-                style = MaterialTheme.typography.labelMedium,
-                color = if (isBlocked) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+        Checkbox(
+            checked = isBlocked,
+            onCheckedChange = { onToggleAllowed() },
+            colors = CheckboxDefaults.colors(
+                checkedColor = MaterialTheme.colorScheme.onErrorContainer,
+                uncheckedColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                checkmarkColor = MaterialTheme.colorScheme.errorContainer
             )
-            RadioButton(
-                selected = isBlocked,
-                onClick = onToggleAllowed,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = MaterialTheme.colorScheme.onErrorContainer,
-                    unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            )
-        }
+        )
     }
 }
 
@@ -635,7 +695,7 @@ private fun FileExplorerHeader(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Navigate up",
+                        contentDescription = stringResource(R.string.file_explorer_cd_navigate_up),
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -718,7 +778,7 @@ private fun FileExplorerHeader(
                                 if (isRoot) {
                                     Icon(
                                         imageVector = Icons.Rounded.Home,
-                                        contentDescription = "Go to root",
+                                        contentDescription = stringResource(R.string.file_explorer_cd_go_root),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier
                                             .padding(end = 4.dp)

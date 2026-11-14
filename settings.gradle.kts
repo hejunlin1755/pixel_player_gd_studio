@@ -19,7 +19,14 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = java.net.URI("https://jitpack.io") } // Usa java.net.URI
+        maven("https://jitpack.io") {
+            content {
+                includeGroup("com.github.FaceOnLive")
+                includeGroup("com.github.philburk")
+                includeGroup("com.github.racra")
+                includeGroup("com.github.tdlibx")
+            }
+        }
     }
 }
 

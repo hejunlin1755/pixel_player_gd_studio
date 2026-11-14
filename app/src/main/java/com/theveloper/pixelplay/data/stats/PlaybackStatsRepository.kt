@@ -44,6 +44,7 @@ class PlaybackStatsRepository @Inject constructor(
     private val historyFile = File(context.filesDir, "playback_history.json")
     private val atomicHistoryFile = AtomicFile(historyFile)
     private val fileLock = Any()
+    private var cachedEvents: List<PlaybackEvent>? = null  // guarded by fileLock
     private val eventsType = object : TypeToken<MutableList<PlaybackEvent>>() {}.type
     private val _refreshVersion = MutableStateFlow(0L)
     val refreshFlow: StateFlow<Long> = _refreshVersion.asStateFlow()
@@ -178,14 +179,13 @@ class PlaybackStatsRepository @Inject constructor(
             startTimestamp = start,
             endTimestamp = coercedTimestamp
         )
-        val writeSucceeded = synchronized(fileLock) {
-            val events = readEventsLocked()
+        val writeSucceeded = updateEventsAtomically { events ->
             val cutoff = sanitizedEvent.endMillis() - MAX_HISTORY_AGE_MS
             if (cutoff > 0) {
                 events.removeAll { it.endMillis() < cutoff }
             }
             events += sanitizedEvent
-            writeEventsLocked(events)
+            events
         }
         if (writeSucceeded) {
             notifyStatsChanged()
@@ -199,6 +199,22 @@ class PlaybackStatsRepository @Inject constructor(
     ): PlaybackStatsSummary = withContext(Dispatchers.IO) {
         val zoneId = ZoneId.systemDefault()
         val allEvents = readEvents()
+        buildSummaryFromEvents(
+            range = range,
+            songs = songs,
+            nowMillis = nowMillis,
+            allEvents = allEvents,
+            zoneId = zoneId
+        )
+    }
+
+    internal fun buildSummaryFromEvents(
+        range: StatsTimeRange,
+        songs: List<Song>,
+        nowMillis: Long,
+        allEvents: List<PlaybackEvent>,
+        zoneId: ZoneId = ZoneId.systemDefault()
+    ): PlaybackStatsSummary {
         val (startBound, endBound) = range.resolveBounds(allEvents, nowMillis, zoneId)
         val filteredEvents = allEvents.mapNotNull { event ->
             val start = event.startMillis()
@@ -211,28 +227,20 @@ class PlaybackStatsRepository @Inject constructor(
             val clippedStart = max(start, lowerBound)
             val clippedEnd = min(end, endBound)
             val clippedDuration = (clippedEnd - clippedStart).coerceAtLeast(0L)
-            val baseDuration = event.durationMs.coerceAtLeast(0L)
-            val effectiveDuration = when {
-                clippedDuration > 0L -> clippedDuration
-                baseDuration > 0L -> baseDuration
-                else -> 0L
-            }
-            if (effectiveDuration <= 0L) {
+            if (clippedDuration <= 0L) {
                 return@mapNotNull null
             }
 
             event.copy(
                 timestamp = clippedEnd,
-                durationMs = effectiveDuration,
+                durationMs = clippedDuration,
                 startTimestamp = clippedStart,
                 endTimestamp = clippedEnd
             )
         }
 
         val songMap = songs.associateBy { it.id }
-        val normalizedEvents = filteredEvents.map { event ->
-            normalizeEventDuration(event, songMap[event.songId])
-        }
+        val normalizedEvents = filteredEvents
 
         val segmentsBySong = normalizedEvents
             .groupBy { it.songId }
@@ -269,6 +277,7 @@ class PlaybackStatsRepository @Inject constructor(
                 compareByDescending<SongPlaybackSummary> { it.totalDurationMs }
                     .thenByDescending { it.playCount }
             )
+            .take(MAX_SONG_STATS_COUNT)
         val topSongs = allSongs.take(5)
 
         val topGenres = segmentsBySong.entries
@@ -279,10 +288,10 @@ class PlaybackStatsRepository @Inject constructor(
             .map { (genre, groupedSongs) ->
                 val flattened = groupedSongs.flatMap { it.value }
                 val uniqueArtists = groupedSongs
-                    .mapNotNull { (songId, _) ->
-                        songMap[songId]?.artist?.takeIf { it.isNotBlank() }
+                    .flatMap { (songId, _) ->
+                        statsArtistNames(songMap[songId])
                     }
-                    .toSet()
+                    .distinctBy { it.normalizedArtistKey() }
                     .size
                 GenrePlaybackSummary(
                     genre = genre,
@@ -317,7 +326,7 @@ class PlaybackStatsRepository @Inject constructor(
         var currentStreak = 0
         var lastDay: java.time.LocalDate? = null
         sortedDays.forEach { day ->
-            if (lastDay == null || day == lastDay?.plusDays(1)) {
+            if (lastDay == null || day == lastDay.plusDays(1)) {
                 currentStreak += 1
             } else {
                 currentStreak = 1
@@ -345,12 +354,22 @@ class PlaybackStatsRepository @Inject constructor(
         val timelineEntries = accumulateTimelineEntries(timelineBuckets, overallSpans)
 
         val topArtists = segmentsBySong.entries
-            .groupBy { (songId, _) ->
-                songMap[songId]?.artist?.takeIf { it.isNotBlank() } ?: "Unknown Artist"
+            .flatMap { (songId, segmentsForSong) ->
+                statsArtistNames(songMap[songId]).map { artist ->
+                    ArtistSongPlayback(
+                        artist = artist,
+                        songId = songId,
+                        segments = segmentsForSong
+                    )
+                }
             }
-            .map { (artist, groupedSongs) ->
-                val flattened = groupedSongs.flatMap { it.value }
-                val uniqueSongCount = groupedSongs.size
+            .groupBy { it.artist }
+            .map { (artist, artistSongs) ->
+                val flattened = artistSongs.flatMap { it.segments }
+                val uniqueSongCount = artistSongs
+                    .map { it.songId }
+                    .toSet()
+                    .size
                 ArtistPlaybackSummary(
                     artist = artist,
                     totalDurationMs = flattened.sumOf { it.durationMs },
@@ -400,17 +419,19 @@ class PlaybackStatsRepository @Inject constructor(
         val peakDay = durationsByDayOfWeek.maxByOrNull { entry ->
             entry.value.sumOf { it.durationMs }
         }
-        val peakDayLabel = peakDay?.key?.getDisplayName(TextStyle.FULL, Locale.US)
+        val peakDayLabel = peakDay?.key?.getDisplayName(TextStyle.FULL, Locale.getDefault())
         val peakDayDuration = peakDay?.value?.sumOf { it.durationMs } ?: 0L
-        val dayListeningDistribution = computeDayListeningDistribution(
-            spans = overallSpans,
-            zoneId = zoneId,
-            range = range,
-            startBound = startBound,
-            endBound = endBound
-        )
+        val dayListeningDistribution = if (range == StatsTimeRange.DAY || range == StatsTimeRange.WEEK) {
+            computeDayListeningDistribution(
+                spans = overallSpans,
+                zoneId = zoneId,
+                range = range,
+                startBound = startBound,
+                endBound = endBound
+            )
+        } else null
 
-        PlaybackStatsSummary(
+        return PlaybackStatsSummary(
             range = range,
             startTimestamp = startBound,
             endTimestamp = endBound,
@@ -438,9 +459,7 @@ class PlaybackStatsRepository @Inject constructor(
     }
 
     suspend fun exportEventsForBackup(): List<PlaybackEvent> = withContext(Dispatchers.IO) {
-        synchronized(fileLock) {
-        readEventsLocked().map { event -> sanitizeEvent(event) }
-        }
+        readEvents().map { event -> sanitizeEvent(event) }
     }
 
     suspend fun loadPlaybackHistory(limit: Int = DEFAULT_PLAYBACK_HISTORY_LIMIT): List<PlaybackHistoryEntry> = withContext(Dispatchers.IO) {
@@ -463,11 +482,11 @@ class PlaybackStatsRepository @Inject constructor(
         events: List<PlaybackEvent>,
         clearExisting: Boolean = true
     ) = withContext(Dispatchers.IO) {
-        val writeSucceeded = synchronized(fileLock) {
+        val writeSucceeded = updateEventsAtomically { existingEvents ->
             val base = if (clearExisting) {
                 emptyList()
             } else {
-                readEventsLocked()
+                existingEvents
             }
             val merged = (base + events)
                 .map { event -> sanitizeEvent(event) }
@@ -476,7 +495,7 @@ class PlaybackStatsRepository @Inject constructor(
                 }
                 .sortedBy { event -> event.timestamp }
                 .toMutableList()
-            writeEventsLocked(merged)
+            merged
         }
         if (writeSucceeded) {
             notifyStatsChanged()
@@ -487,10 +506,16 @@ class PlaybackStatsRepository @Inject constructor(
         notifyStatsChanged()
     }
 
-    private fun readEvents(): List<PlaybackEvent> = synchronized(fileLock) { readEventsLocked() }
+    private fun readEvents(): List<PlaybackEvent> {
+        synchronized(fileLock) { cachedEvents }?.let { return it }
+        val raw = synchronized(fileLock) { readRawHistoryLocked() }
+        return parseEvents(raw).also { parsed ->
+            synchronized(fileLock) { if (cachedEvents == null) cachedEvents = parsed }
+        }
+    }
 
-    private fun readEventsLocked(): MutableList<PlaybackEvent> {
-        val raw = runCatching {
+    private fun readRawHistoryLocked(): String? {
+        return runCatching {
             atomicHistoryFile.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
         }
             .onFailure { throwable ->
@@ -500,7 +525,12 @@ class PlaybackStatsRepository @Inject constructor(
             }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
-            ?: return mutableListOf()
+    }
+
+    private fun parseEvents(raw: String?): MutableList<PlaybackEvent> {
+        if (raw.isNullOrBlank()) {
+            return mutableListOf()
+        }
 
         return runCatching {
             val element = gson.fromJson(raw, JsonElement::class.java)
@@ -540,30 +570,6 @@ class PlaybackStatsRepository @Inject constructor(
             durationMs = finalDuration,
             startTimestamp = finalStart,
             endTimestamp = safeEnd
-        )
-    }
-
-    private fun normalizeEventDuration(
-        event: PlaybackEvent,
-        song: Song?
-    ): PlaybackEvent {
-        val safeEnd = event.endMillis()
-        val trackDuration = song?.duration?.takeIf { it > 0L }
-        val boundedDuration = event.durationMs
-            .coerceAtLeast(0L)
-            .let { duration ->
-                val cappedByTrack = trackDuration?.let { min(duration, it) } ?: duration
-                min(cappedByTrack, MAX_REASONABLE_EVENT_DURATION_MS)
-            }
-        val adjustedStart = max(safeEnd - boundedDuration, 0L)
-        if (boundedDuration == event.durationMs && adjustedStart == event.startMillis()) {
-            return event
-        }
-        return event.copy(
-            durationMs = boundedDuration,
-            startTimestamp = adjustedStart,
-            endTimestamp = safeEnd,
-            timestamp = safeEnd
         )
     }
 
@@ -616,6 +622,30 @@ class PlaybackStatsRepository @Inject constructor(
         val date: LocalDate,
         val durationMs: Long
     )
+
+    private data class ArtistSongPlayback(
+        val artist: String,
+        val songId: String,
+        val segments: List<PlaybackSegment>
+    )
+
+    private fun statsArtistNames(song: Song?): List<String> {
+        if (song == null) return listOf(UNKNOWN_ARTIST)
+
+        val separatedArtists = song.artists
+            .sortedByDescending { it.isPrimary }
+            .map { it.name.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.normalizedArtistKey() }
+        if (separatedArtists.isNotEmpty()) {
+            return separatedArtists
+        }
+
+        val fallbackArtist = song.displayArtist.trim()
+        return listOf(fallbackArtist.ifBlank { UNKNOWN_ARTIST })
+    }
+
+    private fun String.normalizedArtistKey(): String = trim().lowercase(Locale.ROOT)
 
     private fun sliceSpanByDay(span: PlaybackSpan, zoneId: ZoneId): List<DaySlice> {
         if (span.durationMs <= 0L) return emptyList()
@@ -785,15 +815,49 @@ class PlaybackStatsRepository @Inject constructor(
         return sessions
     }
 
-    private fun writeEventsLocked(events: MutableList<PlaybackEvent>): Boolean {
+    private fun updateEventsAtomically(
+        transform: (MutableList<PlaybackEvent>) -> MutableList<PlaybackEvent>
+    ): Boolean {
+        repeat(MAX_FILE_UPDATE_RETRIES) {
+            val rawSnapshot = synchronized(fileLock) { readRawHistoryLocked() }
+            val updatedEvents = transform(parseEvents(rawSnapshot))
+            val payload = serializeEvents(updatedEvents)
+
+            val writeSucceeded = synchronized(fileLock) {
+                val latestRaw = readRawHistoryLocked()
+                if (latestRaw != rawSnapshot) {
+                    return@synchronized false
+                }
+                val result = writePayloadLocked(payload)
+                if (result) cachedEvents = null
+                result
+            }
+            if (writeSucceeded) {
+                return true
+            }
+        }
+
+        val fallbackRawSnapshot = synchronized(fileLock) { readRawHistoryLocked() }
+        val payload = serializeEvents(transform(parseEvents(fallbackRawSnapshot)))
+        return synchronized(fileLock) {
+            val result = writePayloadLocked(payload)
+            if (result) cachedEvents = null
+            result
+        }
+    }
+
+    private fun serializeEvents(events: List<PlaybackEvent>): ByteArray {
         val sanitized = events.map { sanitizeEvent(it) }
+        return gson.toJson(sanitized).toByteArray(Charsets.UTF_8)
+    }
+
+    private fun writePayloadLocked(payload: ByteArray): Boolean {
         var outputStream: FileOutputStream? = null
         return runCatching {
             val parent = historyFile.parentFile
             if (parent != null && !parent.exists() && !parent.mkdirs()) {
                 Timber.w("Unable to ensure playback history directory: ${parent.absolutePath}")
             }
-            val payload = gson.toJson(sanitized).toByteArray(Charsets.UTF_8)
             outputStream = atomicHistoryFile.startWrite()
             outputStream?.write(payload)
             outputStream?.fd?.sync()
@@ -879,7 +943,7 @@ class PlaybackStatsRepository @Inject constructor(
             val start = day.atStartOfDay(zoneId).toInstant()
             val end = day.plusDays(1).atStartOfDay(zoneId).toInstant()
             TimelineBucket(
-                label = day.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.US),
+                label = day.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
                 startMillis = start.toEpochMilli(),
                 endMillis = end.toEpochMilli(),
                 inclusiveEnd = false
@@ -906,7 +970,7 @@ class PlaybackStatsRepository @Inject constructor(
                 val end = yearMonth.atDay(endDay).plusDays(1).atStartOfDay(zoneId).toInstant()
                 add(
                     TimelineBucket(
-                        label = "Week ${index + 1}",
+                        label = context.getString(com.theveloper.pixelplay.R.string.stats_week_label, index + 1),
                         startMillis = start.toEpochMilli(),
                         endMillis = end.toEpochMilli(),
                         inclusiveEnd = false
@@ -922,7 +986,7 @@ class PlaybackStatsRepository @Inject constructor(
             val start = year.atMonth(monthIndex).atDay(1).atStartOfDay(zoneId).toInstant()
             val end = year.atMonth(monthIndex).atEndOfMonth().plusDays(1).atStartOfDay(zoneId).toInstant()
             TimelineBucket(
-                label = year.atMonth(monthIndex).month.getDisplayName(TextStyle.SHORT, Locale.US),
+                label = year.atMonth(monthIndex).month.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
                 startMillis = start.toEpochMilli(),
                 endMillis = end.toEpochMilli(),
                 inclusiveEnd = false
@@ -1031,16 +1095,18 @@ class PlaybackStatsRepository @Inject constructor(
     companion object {
         private const val DEFAULT_PLAYBACK_HISTORY_LIMIT = 500
         private const val MAX_PLAYBACK_HISTORY_LIMIT = 5_000
+        private const val MAX_FILE_UPDATE_RETRIES = 3
+        private const val UNKNOWN_ARTIST = "Unknown Artist"
         private val MAX_HISTORY_AGE_MS = TimeUnit.DAYS.toMillis(730) // Keep roughly two years of history
-        private val MAX_REASONABLE_EVENT_DURATION_MS = TimeUnit.HOURS.toMillis(8)
-        private val SEGMENT_JOIN_TOLERANCE_MS = TimeUnit.SECONDS.toMillis(2)
+        private const val SEGMENT_JOIN_TOLERANCE_MS = 0L
+        private const val MAX_SONG_STATS_COUNT = 100
     }
 }
 
 enum class StatsTimeRange(val displayName: String) {
     DAY("Today"),
-    WEEK("This Week"),
-    MONTH("This Month"),
-    YEAR("This Year"),
+    WEEK("Week to Date"),
+    MONTH("Month to Date"),
+    YEAR("Year to Date"),
     ALL("All Time")
 }

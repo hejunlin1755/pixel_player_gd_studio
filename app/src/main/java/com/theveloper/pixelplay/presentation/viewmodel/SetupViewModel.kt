@@ -5,10 +5,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.backup.BackupManager
 import com.theveloper.pixelplay.data.backup.model.BackupTransferProgressUpdate
 import com.theveloper.pixelplay.data.backup.model.BackupOperationType
@@ -37,7 +37,6 @@ import java.io.File
 data class SetupUiState(
     val mediaPermissionGranted: Boolean = false,
     val notificationsPermissionGranted: Boolean = false,
-    val allFilesAccessGranted: Boolean = false,
     val isLoadingDirectories: Boolean = false,
     val blockedDirectories: Set<String> = emptySet(),
     val libraryNavigationMode: String = "tab_row",
@@ -54,8 +53,7 @@ data class SetupUiState(
         get() {
             val mediaOk = mediaPermissionGranted
             val notificationsOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) notificationsPermissionGranted else true
-            val allFilesOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) allFilesAccessGranted else true
-            return mediaOk && notificationsOk && allFilesOk
+            return mediaOk && notificationsOk
         }
 }
 
@@ -82,9 +80,6 @@ class SetupViewModel @Inject constructor(
     /**
      * Expose sync progress for UI to show during initial setup
      */
-    /**
-     * Expose sync progress for UI to show during initial setup
-     */
     val isSyncing = syncManager.isSyncing
 
     private val fileExplorerStateHolder = FileExplorerStateHolder(userPreferencesRepository, viewModelScope, context)
@@ -95,6 +90,9 @@ class SetupViewModel @Inject constructor(
     val availableStorages = fileExplorerStateHolder.availableStorages
     val selectedStorageIndex = fileExplorerStateHolder.selectedStorageIndex
     val isLoadingDirectories = fileExplorerStateHolder.isLoading
+    val isExplorerPriming = fileExplorerStateHolder.isPrimingExplorer
+    val isExplorerReady = fileExplorerStateHolder.isExplorerReady
+    val isCurrentDirectoryResolved = fileExplorerStateHolder.isCurrentDirectoryResolved
     private var hasPendingDirectoryRuleChanges = false
     private var latestDirectoryRuleUpdateJob: Job? = null
 
@@ -156,12 +154,6 @@ class SetupViewModel @Inject constructor(
             true // Not required before Android 13 (Tiramisu)
         }
 
-        val allFilesAccessGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            true // Not required before Android 11 (R)
-        }
-
         val alarmsPermissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             alarmManager.canScheduleExactAlarms()
@@ -173,7 +165,6 @@ class SetupViewModel @Inject constructor(
             it.copy(
                 mediaPermissionGranted = mediaPermissionGranted,
                 notificationsPermissionGranted = notificationsPermissionGranted,
-                allFilesAccessGranted = allFilesAccessGranted,
                 alarmsPermissionGranted = alarmsPermissionGranted
             )
         }
@@ -181,7 +172,6 @@ class SetupViewModel @Inject constructor(
 
     fun loadMusicDirectories() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingDirectories = true) }
             if (!userPreferencesRepository.initialSetupDoneFlow.first()) {
                 // Blacklist model: default is allow all, so no setup needed.
             }
@@ -189,8 +179,7 @@ class SetupViewModel @Inject constructor(
             userPreferencesRepository.blockedDirectoriesFlow.first().let { blocked ->
                 _uiState.update { it.copy(blockedDirectories = blocked) }
             }
-            fileExplorerStateHolder.refreshCurrentDirectory()
-            _uiState.update { it.copy(isLoadingDirectories = false) }
+            fileExplorerStateHolder.primeExplorerRoot()?.join()
         }
     }
 
@@ -224,6 +213,14 @@ class SetupViewModel @Inject constructor(
 
     fun refreshCurrentDirectory() {
         fileExplorerStateHolder.refreshCurrentDirectory()
+    }
+
+    fun primeExplorer() {
+        fileExplorerStateHolder.primeExplorerRoot()
+    }
+
+    fun openExplorer() {
+        fileExplorerStateHolder.openExplorerRoot()
     }
 
     fun navigateUp() {
@@ -298,7 +295,10 @@ class SetupViewModel @Inject constructor(
                     _uiState.update { it.copy(isInspectingBackup = false) }
                     _events.emit(
                         SetupEvent.Message(
-                            "Invalid backup: ${error.localizedMessage ?: "Unknown error"}"
+                            context.getString(
+                                R.string.settings_backup_invalid_format,
+                                error.localizedMessage ?: context.getString(R.string.common_error_unknown),
+                            )
                         )
                     )
                 }
@@ -337,8 +337,8 @@ class SetupViewModel @Inject constructor(
                         operation = BackupOperationType.IMPORT,
                         step = 0,
                         totalSteps = 1,
-                        title = "Preparing restore",
-                        detail = "Starting restore task."
+                        title = context.getString(R.string.settings_backup_progress_preparing_restore),
+                        detail = context.getString(R.string.settings_backup_progress_starting_task),
                     )
                 )
             }
@@ -349,26 +349,29 @@ class SetupViewModel @Inject constructor(
 
             when (result) {
                 is RestoreResult.Success -> {
-                    _events.emit(SetupEvent.RestoreCompleted("Backup restored successfully"))
+                    _events.emit(SetupEvent.RestoreCompleted(context.getString(R.string.settings_restore_completed_success)))
                 }
                 is RestoreResult.PartialFailure -> {
                     val canFinishSetup = result.succeeded.isNotEmpty() || !result.rolledBack
                     if (canFinishSetup) {
                         _events.emit(
                             SetupEvent.RestoreCompleted(
-                                "Restore completed with some unresolved issues."
+                                context.getString(R.string.settings_restore_completed_partial_issues),
                             )
                         )
                     } else {
                         _events.emit(
                             SetupEvent.Message(
-                                "Restore could not be completed: ${result.failed.values.joinToString()}"
+                                context.getString(
+                                    R.string.settings_restore_could_not_complete,
+                                    result.failed.values.joinToString(),
+                                ),
                             )
                         )
                     }
                 }
                 is RestoreResult.TotalFailure -> {
-                    _events.emit(SetupEvent.Message("Restore failed: ${result.error}"))
+                    _events.emit(SetupEvent.Message(context.getString(R.string.settings_restore_failed_format, result.error)))
                 }
             }
 

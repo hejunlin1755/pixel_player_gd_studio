@@ -298,7 +298,7 @@ class DailyMixManager @Inject constructor(
             val weight = stats.playCount.toDouble() + (stats.totalPlayDurationMs / 60000.0)
             if (weight <= 0) return@forEach
             artistAffinity.merge(song.artistId, weight, Double::plus)
-            song.genre?.lowercase()?.let { genreAffinity.merge(it, weight, Double::plus) }
+            normalizeGenreKey(song.genre)?.let { genreAffinity.merge(it, weight, Double::plus) }
         }
 
         val favoriteArtistWeights = mutableMapOf<Long, Int>()
@@ -319,22 +319,28 @@ class DailyMixManager @Inject constructor(
             val durationScore = (stats?.totalPlayDurationMs?.toDouble() ?: 0.0) / maxDuration
             val affinityScore = (playCountScore * 0.7 + durationScore * 0.3).coerceIn(0.0, 1.0)
 
-            val genreKey = song.genre?.lowercase()
+            val genreKey = normalizeGenreKey(song.genre)
             val artistPreference = artistAffinity[song.artistId]?.div(maxArtistAffinity) ?: 0.0
             val genrePreference = genreKey?.let { (genreAffinity[it] ?: 0.0) / maxGenreAffinity } ?: 0.0
             val favoriteArtistPreference = favoriteArtistWeights[song.artistId]?.toDouble()?.div(maxFavoriteArtist) ?: 0.0
-            val preferenceScore = listOf(artistPreference, genrePreference, favoriteArtistPreference).maxOrNull() ?: 0.0
+            val preferenceScore = if (genreKey == null) {
+                (artistPreference * 0.6) + (favoriteArtistPreference * 0.4)
+            } else {
+                (artistPreference * 0.45) +
+                    (genrePreference * 0.35) +
+                    (favoriteArtistPreference * 0.20)
+            }
 
             val recencyScore = computeRecencyScore(stats?.lastPlayedTimestamp, now)
             val noveltyScore = computeNoveltyScore(song.dateAdded, now)
             val favoriteScore = if (favoriteSongIds.contains(song.id)) 1.0 else 0.0
             val baselineScore = if (stats == null) 0.1 else 0.0
-            val noise = random.nextDouble() * 0.03
+            val noise = random.nextDouble() * 0.005 // Significantly reduced noise
 
-            val finalScore = (affinityScore * 0.4) +
-                (preferenceScore * 0.2) +
-                (recencyScore * 0.2) +
-                (favoriteScore * 0.15) +
+            val finalScore = (preferenceScore * 0.45) +
+                (affinityScore * 0.25) +
+                (recencyScore * 0.15) +
+                (favoriteScore * 0.1) +
                 (noveltyScore * 0.05) +
                 baselineScore +
                 noise
@@ -374,16 +380,28 @@ class DailyMixManager @Inject constructor(
             return allSongs.shuffled(random).take(limit.coerceAtMost(allSongs.size))
         }
 
-        val selected = pickWithDiversity(rankedSongs, favoriteSongIds, limit)
+        val diversityState = DiversityState()
+        val selected = pickWithDiversity(rankedSongs, favoriteSongIds, limit, diversityState)
         if (selected.size >= limit || selected.size == rankedSongs.size) {
             return selected
         }
 
-        val remaining = allSongs
-            .filterNot { song -> selected.any { it.id == song.id } }
-            .shuffled(random)
+        val remainingRanked = rankedSongs.filterNot { candidate ->
+            selected.any { it.id == candidate.song.id }
+        }
+        val quotaFill = pickWithDiversity(remainingRanked, favoriteSongIds, limit - selected.size, diversityState)
+        val combined = (selected + quotaFill).distinctBy { it.id }.toMutableList()
 
-        val combined = (selected + remaining).distinctBy { it.id }
+        if (combined.size < limit) {
+            val remaining = allSongs
+                .filterNot { song -> combined.any { it.id == song.id } }
+                .shuffled(random)
+            for (song in remaining) {
+                combined.add(song)
+                if (combined.size >= limit) break
+            }
+        }
+
         return combined.take(limit.coerceAtMost(combined.size))
     }
 
@@ -409,10 +427,13 @@ class DailyMixManager @Inject constructor(
         val coreSectionSize = (limit * 0.45).toInt().coerceAtLeast(10).coerceAtMost(limit)
         val discoverySectionSize = (limit - favoriteSectionSize - coreSectionSize).coerceAtLeast(0)
 
+        val diversityState = DiversityState()
+
         val favoriteSection = pickWithDiversity(
             rankedSongs.filter { favoriteSongIds.contains(it.song.id) },
             favoriteSongIds,
-            favoriteSectionSize
+            favoriteSectionSize,
+            diversityState
         )
 
         val alreadySelectedIds = favoriteSection.map { it.id }.toMutableSet()
@@ -420,7 +441,8 @@ class DailyMixManager @Inject constructor(
         val coreSection = pickWithDiversity(
             rankedSongs.filterNot { alreadySelectedIds.contains(it.song.id) },
             favoriteSongIds,
-            coreSectionSize
+            coreSectionSize,
+            diversityState
         )
 
         alreadySelectedIds.addAll(coreSection.map { it.id })
@@ -429,12 +451,27 @@ class DailyMixManager @Inject constructor(
             .filterNot { alreadySelectedIds.contains(it.song.id) }
             .sortedWith(compareByDescending<RankedSong> { it.discoveryScore }.thenBy { it.song.id })
 
-        val discoverySection = pickWithDiversity(discoveryCandidates, favoriteSongIds, discoverySectionSize)
+        val discoverySection = pickWithDiversity(
+            discoveryCandidates,
+            favoriteSongIds,
+            discoverySectionSize,
+            diversityState
+        )
 
         val orderedResult = LinkedHashSet<Song>()
         orderedResult.addAll(favoriteSection)
         orderedResult.addAll(coreSection)
         orderedResult.addAll(discoverySection)
+
+        if (orderedResult.size < limit) {
+            val quotaFill = pickWithDiversity(
+                rankedSongs.filterNot { orderedResult.any { selected -> selected.id == it.song.id } },
+                favoriteSongIds,
+                limit - orderedResult.size,
+                diversityState
+            )
+            orderedResult.addAll(quotaFill)
+        }
 
         if (orderedResult.size < limit) {
             val filler = allSongs
@@ -449,25 +486,70 @@ class DailyMixManager @Inject constructor(
         return orderedResult.take(limit.coerceAtMost(orderedResult.size))
     }
 
+    /**
+     * Gets a localized, non-randomized, highly curated list of candidates
+     * optimized to be sent to an LLM for thematic playlist generation.
+     */
+    suspend fun getTopCandidatesForAi(
+        allSongs: List<Song>,
+        favoriteSongIds: Set<String> = emptySet(),
+        limit: Int = 100
+    ): List<Song> {
+        if (allSongs.isEmpty()) {
+            return emptyList()
+        }
+
+        // Use a static seed per day to ensure the AI doesn't get wildly different lists
+        // if called multiple times in one day, preserving prompt caching.
+        val calendar = Calendar.getInstance()
+        val seed = calendar.get(Calendar.YEAR) * 1000 + calendar.get(Calendar.DAY_OF_YEAR) + 42
+        val random = java.util.Random(seed.toLong())
+
+        val rankedSongs = computeRankedSongs(allSongs, favoriteSongIds, random)
+        if (rankedSongs.isEmpty()) {
+            return allSongs.take(limit.coerceAtMost(allSongs.size))
+        }
+
+        return rankedSongs.take(limit).map { it.song }
+    }
+
     private fun pickWithDiversity(
         rankedSongs: List<RankedSong>,
         favoriteSongIds: Set<String>,
-        limit: Int
+        limit: Int,
+        state: DiversityState = DiversityState()
     ): List<Song> {
         if (limit <= 0 || rankedSongs.isEmpty()) return emptyList()
 
         val selected = mutableListOf<Song>()
-        val artistCounts = mutableMapOf<Long, Int>()
 
         for (candidate in rankedSongs) {
             if (selected.size >= limit) break
             val artistId = candidate.song.artistId
-            val maxPerArtist = if (favoriteSongIds.contains(candidate.song.id)) 2 else 1
-            val currentCount = artistCounts.getOrDefault(artistId, 0)
+            val maxPerArtist = if (favoriteSongIds.contains(candidate.song.id)) 3 else 2
+            val currentCount = state.artistCounts.getOrDefault(artistId, 0)
             if (currentCount >= maxPerArtist) continue
 
+            val genreKey = normalizeGenreKey(candidate.song.genre)
+            val maxPerGenre = if (genreKey == null) {
+                maxUnknownGenreCount(limit, favoriteSongIds.contains(candidate.song.id))
+            } else {
+                maxKnownGenreCount(limit, favoriteSongIds.contains(candidate.song.id))
+            }
+            if (genreKey == null) {
+                if (state.unknownGenreCount >= maxPerGenre) continue
+            } else {
+                val currentGenreCount = state.genreCounts.getOrDefault(genreKey, 0)
+                if (currentGenreCount >= maxPerGenre) continue
+            }
+
             selected += candidate.song
-            artistCounts[artistId] = currentCount + 1
+            state.artistCounts[artistId] = currentCount + 1
+            if (genreKey == null) {
+                state.unknownGenreCount += 1
+            } else {
+                state.genreCounts[genreKey] = state.genreCounts.getOrDefault(genreKey, 0) + 1
+            }
         }
 
         if (selected.size < limit) {
@@ -479,6 +561,38 @@ class DailyMixManager @Inject constructor(
         }
 
         return selected.take(limit)
+    }
+
+    private fun normalizeGenreKey(rawGenre: String?): String? {
+        val normalized = rawGenre
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+
+        return if (normalized.contains("unknown")) {
+            null
+        } else {
+            normalized
+        }
+    }
+
+    private fun maxKnownGenreCount(limit: Int, isFavorite: Boolean): Int {
+        val baseCap = when {
+            limit <= 12 -> 2
+            limit <= 30 -> 3
+            else -> 4
+        }
+        return baseCap + if (isFavorite) 1 else 0
+    }
+
+    private fun maxUnknownGenreCount(limit: Int, isFavorite: Boolean): Int {
+        val baseCap = when {
+            limit <= 12 -> 1
+            limit <= 30 -> 2
+            else -> 3
+        }
+        return baseCap + if (isFavorite) 1 else 0
     }
 
     private fun computeRecencyScore(lastPlayedTimestamp: Long?, now: Long): Double {
@@ -512,6 +626,12 @@ class DailyMixManager @Inject constructor(
         val recencyScore: Double,
         val noveltyScore: Double,
         val favoriteScore: Double
+    )
+
+    private data class DiversityState(
+        val artistCounts: MutableMap<Long, Int> = mutableMapOf(),
+        val genreCounts: MutableMap<String, Int> = mutableMapOf(),
+        var unknownGenreCount: Int = 0
     )
 
     companion object {

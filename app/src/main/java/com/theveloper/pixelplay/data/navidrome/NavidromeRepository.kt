@@ -1,7 +1,11 @@
+@file:Suppress("DEPRECATION")
 package com.theveloper.pixelplay.data.navidrome
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.database.AlbumEntity
 import com.theveloper.pixelplay.data.database.ArtistEntity
 import com.theveloper.pixelplay.data.database.MusicDao
@@ -23,24 +27,32 @@ import com.theveloper.pixelplay.data.stream.BulkSyncResult
 import com.theveloper.pixelplay.data.stream.CloudMusicUtils
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.absoluteValue
+import androidx.core.content.edit
 
 /**
  * Repository for Navidrome/Subsonic music service.
  *
  * Manages authentication, playlist synchronization, and song caching.
  */
+@Suppress("DEPRECATION")
 @Singleton
 class NavidromeRepository @Inject constructor(
     private val api: NavidromeApiService,
@@ -49,12 +61,14 @@ class NavidromeRepository @Inject constructor(
     private val playlistPreferencesRepository: PlaylistPreferencesRepository,
     @ApplicationContext private val context: Context
 ) {
-    private companion object {
+    companion object {
+        const val SYNC_THRESHOLD_MS = 24 * 60 * 60 * 1000L // 24 hours
         private const val TAG = "NavidromeRepo"
         private const val PREFS_NAME = "navidrome_prefs"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_USERNAME = "username"
-        private const val KEY_PASSWORD = "password" // Should be encrypted in production
+        private const val KEY_PASSWORD = "password"
+        private const val KEY_LAST_FULL_SYNC = "last_full_sync"
 
         // ID offsets for unified library (following Netease: 3-5, QQ: 6-8)
         // Using negative offsets to prevent collisions with MediaStore IDs
@@ -67,7 +81,21 @@ class NavidromeRepository @Inject constructor(
         private const val LIBRARY_PLAYLIST_ID = "__library__"
     }
 
-    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = try {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            PREFS_NAME,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (e: Exception) {
+        Timber.e(e, "$TAG: Failed to create EncryptedSharedPreferences, falling back to plain")
+        context.getSharedPreferences("${PREFS_NAME}_plain", Context.MODE_PRIVATE)
+    }
 
     private val _isLoggedInFlow = MutableStateFlow(false)
     val isLoggedInFlow: StateFlow<Boolean> = _isLoggedInFlow.asStateFlow()
@@ -119,6 +147,10 @@ class NavidromeRepository @Inject constructor(
     val username: String?
         get() = prefs.getString(KEY_USERNAME, null)
 
+    var lastFullSyncTime: Long
+        get() = prefs.getLong(KEY_LAST_FULL_SYNC, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_FULL_SYNC, value) }
+
     /**
      * Login to Navidrome server with credentials.
      *
@@ -150,11 +182,11 @@ class NavidromeRepository @Inject constructor(
                 }
 
                 // Save credentials
-                prefs.edit()
-                    .putString(KEY_SERVER_URL, credentials.normalizedServerUrl)
-                    .putString(KEY_USERNAME, username)
-                    .putString(KEY_PASSWORD, password)
-                    .apply()
+                prefs.edit {
+                    putString(KEY_SERVER_URL, credentials.normalizedServerUrl)
+                        .putString(KEY_USERNAME, username)
+                        .putString(KEY_PASSWORD, password)
+                }
 
                 _isLoggedInFlow.value = true
                 Timber.d("$TAG: Login successful for $username@$serverUrl")
@@ -174,7 +206,7 @@ class NavidromeRepository @Inject constructor(
     suspend fun logout() {
         Timber.d("$TAG: Logging out")
         api.clearCredentials()
-        prefs.edit().clear().apply()
+        prefs.edit { clear() }
 
         // Delete all Navidrome playlists from database
         val playlistsToDelete = dao.getAllPlaylistsList()
@@ -347,7 +379,9 @@ class NavidromeRepository @Inject constructor(
     /**
      * Sync all songs from the server library by fetching all albums.
      */
-    suspend fun syncLibrarySongs(): Result<Int> {
+    suspend fun syncLibrarySongs(
+        onProgress: ((Float, String) -> Unit)? = null
+    ): Result<Int> {
         if (!isLoggedIn) {
             return Result.failure(Exception("Not logged in"))
         }
@@ -357,30 +391,59 @@ class NavidromeRepository @Inject constructor(
                 Timber.d("$TAG: Syncing library songs from server")
                 val allSongs = mutableListOf<NavidromeSong>()
                 val pageSize = 500
+                
+                onProgress?.invoke(0.1f, context.getString(R.string.cloud_sync_status_fetching_albums))
                 val fetchedAlbums = fetchAllAlbums(pageSize)
 
-                // Fetch songs for each album
-                for (albumJson in fetchedAlbums) {
-                    val albumId = albumJson.optString("id", "")
-                    if (albumId.isBlank()) continue
+                // Fetch songs for each album in parallel
+                val totalAlbums = fetchedAlbums.size
+                val concurrencyLimit = 5
+                val semaphore = Semaphore(concurrencyLimit)
+                val processedCount = AtomicInteger(0)
 
-                    val songsResult = api.getAlbum(albumId)
-                    songsResult.fold(
-                        onSuccess = { songJsons ->
-                            val songs = NavidromeResponseParser.parseSongs(songJsons)
-                            allSongs.addAll(songs)
-                        },
-                        onFailure = {
-                            Timber.w(it, "$TAG: Failed to fetch songs for album $albumId")
+                val albumSongLists = coroutineScope {
+                    fetchedAlbums.map { albumJson ->
+                        async {
+                            semaphore.withPermit {
+                                val albumId = albumJson.optString("id", "")
+                                val albumTitle = albumJson.optString("title", "Unknown Album")
+                                if (albumId.isBlank()) return@withPermit emptyList()
+
+                                val songsResult = api.getAlbum(albumId)
+                                val currentProcessed = processedCount.incrementAndGet()
+                                
+                                val progress = 0.1f + (currentProcessed.toFloat() / totalAlbums.coerceAtLeast(1) * 0.8f)
+                                onProgress?.invoke(
+                                    progress, 
+                                    context.getString(R.string.cloud_sync_status_fetching_songs_from_format, albumTitle)
+                                )
+
+                                songsResult.fold(
+                                    onSuccess = { songJsons ->
+                                        NavidromeResponseParser.parseSongs(songJsons)
+                                    },
+                                    onFailure = {
+                                        Timber.w(it, "$TAG: Failed to fetch songs for album $albumId")
+                                        emptyList()
+                                    }
+                                )
+                            }
                         }
-                    )
+                    }.awaitAll()
                 }
+
+                allSongs.addAll(albumSongLists.flatten())
 
                 if (allSongs.isEmpty()) {
                     Timber.d("$TAG: No library songs found on server")
+                    onProgress?.invoke(1f, context.getString(R.string.cloud_sync_status_no_songs_found))
                     return@withContext Result.success(0)
                 }
 
+                onProgress?.invoke(
+                    0.95f, 
+                    context.getString(R.string.cloud_sync_status_saving_songs_format, allSongs.size)
+                )
                 // Deduplicate by song ID
                 val uniqueSongs = allSongs.distinctBy { it.id }
 
@@ -393,6 +456,7 @@ class NavidromeRepository @Inject constructor(
                 dao.insertSongs(entities)
 
                 Timber.d("$TAG: Synced ${entities.size} library songs from ${fetchedAlbums.size} albums")
+                onProgress?.invoke(1f, context.getString(R.string.cloud_sync_status_library_sync_complete))
                 Result.success(entities.size)
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Failed to sync library songs")
@@ -429,18 +493,25 @@ class NavidromeRepository @Inject constructor(
     /**
      * Sync all playlists and their songs, plus library songs.
      */
-    suspend fun syncAllPlaylistsAndSongs(): Result<BulkSyncResult> {
+    suspend fun syncAllPlaylistsAndSongs(
+        onProgress: ((Float, String) -> Unit)? = null
+    ): Result<BulkSyncResult> {
         return withContext(Dispatchers.IO) {
             var syncedSongCount = 0
             var failedPlaylistCount = 0
 
+            onProgress?.invoke(0.05f, context.getString(R.string.cloud_sync_status_syncing_library))
             // Sync library songs (all albums)
-            val libResult = syncLibrarySongs()
+            val libResult = syncLibrarySongs { progress, message ->
+                // Map library sync progress (0-1) to 0.05-0.4 range
+                onProgress?.invoke(0.05f + (progress * 0.35f), message)
+            }
             libResult.fold(
                 onSuccess = { count -> syncedSongCount += count },
                 onFailure = { Timber.w(it, "$TAG: Failed syncing library songs") }
             )
 
+            onProgress?.invoke(0.4f, context.getString(R.string.cloud_sync_status_fetching_playlists))
             // Sync playlists
             val playlistResult = syncPlaylists().getOrElse {
                 // Playlists failed but library songs may have synced
@@ -458,7 +529,17 @@ class NavidromeRepository @Inject constructor(
                 )
             }
 
-            playlistResult.forEach { playlist ->
+            val totalPlaylists = playlistResult.size
+            playlistResult.forEachIndexed { index, playlist ->
+                val progressBase = 0.4f
+                val progressStep = 0.5f / totalPlaylists.coerceAtLeast(1)
+                val currentProgress = progressBase + (index * progressStep)
+                
+                onProgress?.invoke(
+                    currentProgress, 
+                    context.getString(R.string.cloud_sync_status_syncing_playlist_format, playlist.name)
+                )
+                
                 val songSyncResult = syncPlaylistSongs(playlist.id)
                 songSyncResult.fold(
                     onSuccess = { count -> syncedSongCount += count },
@@ -469,11 +550,18 @@ class NavidromeRepository @Inject constructor(
                 )
             }
 
+            onProgress?.invoke(0.95f, context.getString(R.string.cloud_sync_status_updating_local))
             // Sync to unified library once after everything is synced
             try {
                 syncUnifiedLibrarySongsFromNavidrome()
             } catch (e: Exception) {
                 Timber.e(e, "$TAG: Failed to sync unified library")
+            }
+
+            onProgress?.invoke(1f, context.getString(R.string.cloud_sync_status_sync_complete))
+
+            if (failedPlaylistCount == 0) {
+                lastFullSyncTime = System.currentTimeMillis()
             }
 
             Result.success(
@@ -692,7 +780,7 @@ class NavidromeRepository @Inject constructor(
                     dateAdded = navidromeSong.dateAdded.takeIf { it > 0 }
                         ?: System.currentTimeMillis(),
                     mimeType = navidromeSong.mimeType,
-                    bitrate = navidromeSong.bitRate,
+                    bitrate = navidromeSong.bitRate?.let { it * 1000 },
                     sampleRate = null,
                     telegramChatId = null,
                     telegramFileId = null,
@@ -742,7 +830,7 @@ class NavidromeRepository @Inject constructor(
 
     // ─── App Playlist Management ───────────────────────────────────────────
 
-    private suspend fun getAppPlaylistIdForNavidrome(navidromePlaylistId: String): String {
+    private fun getAppPlaylistIdForNavidrome(navidromePlaylistId: String): String {
         return "$NAVIDROME_PLAYLIST_PREFIX$navidromePlaylistId"
     }
 
@@ -798,6 +886,40 @@ class NavidromeRepository @Inject constructor(
         }
     }
 
+    // ─── Playback Reporting ──────────────────────────────────────────────
+
+    suspend fun reportPlayback(
+        navidromeId: String,
+        positionMs: Long,
+        state: String,
+        playbackRate: Float = 1.0f,
+        ignoreScrobble: Boolean = false
+    ): Result<Unit> {
+        if (!isLoggedIn) return Result.failure(Exception("Not logged in"))
+        val result = api.reportPlayback(
+            mediaId = navidromeId,
+            positionMs = positionMs,
+            state = state,
+            playbackRate = playbackRate,
+            ignoreScrobble = ignoreScrobble
+        )
+        // Fallback to standard scrobble if reportPlayback is not supported.
+        // PS: The latest release of Navidrome currently doesn't support the
+        // standard OpenSubsonic API (reportPlayback) at the time of writing
+        // See: (https://github.com/navidrome/navidrome/pull/5442), so this is required.
+        if (result.isFailure && result.exceptionOrNull()?.message?.contains("404") == true) {
+            if (state == "playing" || state == "starting") {
+                return api.scrobble(id = navidromeId, submission = false)
+            }
+        }
+        return result
+    }
+
+    suspend fun scrobble(navidromeId: String, submission: Boolean = true): Result<Unit> {
+        if (!isLoggedIn) return Result.failure(Exception("Not logged in"))
+        return api.scrobble(id = navidromeId, submission = submission)
+    }
+
     // ─── Delete ────────────────────────────────────────────────────────────
 
     suspend fun deletePlaylist(playlistId: String) {
@@ -827,11 +949,12 @@ fun NavidromeSong.toSong(): Song {
         duration = duration,
         genre = genre,
         mimeType = resolvedMimeType,
-        bitrate = bitRate,
+        bitrate = bitRate?.let { it * 1000 },
         sampleRate = null,
         year = year,
         trackNumber = trackNumber,
         dateAdded = System.currentTimeMillis(),
-        isFavorite = false
+        isFavorite = false,
+        navidromeId = id
     )
 }

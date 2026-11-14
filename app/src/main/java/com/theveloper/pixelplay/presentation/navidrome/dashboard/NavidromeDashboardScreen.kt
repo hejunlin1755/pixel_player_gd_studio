@@ -32,14 +32,16 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.database.NavidromePlaylistEntity
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import com.theveloper.pixelplay.utils.formatTimeAgo
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -49,6 +51,7 @@ fun NavidromeDashboardScreen(
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by viewModel.syncProgress.collectAsStateWithLifecycle()
     val syncMessage by viewModel.syncMessage.collectAsStateWithLifecycle()
 
     val cardShape = AbsoluteSmoothCornerShape(
@@ -63,7 +66,7 @@ fun NavidromeDashboardScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "Subsonic",
+                        stringResource(R.string.subsonic_dashboard_title),
                         fontFamily = GoogleSansRounded,
                         fontWeight = FontWeight.Bold
                     )
@@ -81,7 +84,7 @@ fun NavidromeDashboardScreen(
                     ) {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.common_back)
                         )
                     }
                 },
@@ -92,8 +95,10 @@ fun NavidromeDashboardScreen(
         DashboardContent(
             playlists = playlists,
             isSyncing = isSyncing,
+            syncProgress = syncProgress,
             syncMessage = syncMessage,
             username = viewModel.username,
+            lastSyncTime = viewModel.lastSyncTime,
             onSyncAll = { viewModel.syncAllPlaylistsAndSongs() },
             onSyncPlaylist = { viewModel.syncPlaylistSongs(it) },
             onDeletePlaylist = { viewModel.deletePlaylist(it) },
@@ -112,8 +117,10 @@ fun NavidromeDashboardScreen(
 private fun DashboardContent(
     playlists: List<NavidromePlaylistEntity>,
     isSyncing: Boolean,
+    syncProgress: Float?,
     syncMessage: String?,
     username: String?,
+    lastSyncTime: Long,
     onSyncAll: () -> Unit,
     onSyncPlaylist: (String) -> Unit,
     onDeletePlaylist: (String) -> Unit,
@@ -148,23 +155,47 @@ private fun DashboardContent(
                             MaterialTheme.colorScheme.primaryContainer
                     )
                 ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isSyncing && syncProgress == null) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.width(12.dp))
+                            }
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontFamily = GoogleSansRounded,
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(Modifier.width(12.dp))
+                            if (isSyncing && syncProgress != null) {
+                                Text(
+                                    text = "${(syncProgress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = GoogleSansRounded,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = GoogleSansRounded
-                        )
+                        
+                        if (isSyncing && syncProgress != null) {
+                            Spacer(Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                progress = { syncProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                            )
+                        }
                     }
                 }
             }
@@ -210,10 +241,16 @@ private fun DashboardContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${playlists.size} playlists synced",
+                            text = stringResource(R.string.cloud_dashboard_playlists_synced_count, playlists.size),
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = GoogleSansRounded,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Last synced: ${formatTimeAgo(lastSyncTime)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = GoogleSansRounded,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -238,7 +275,7 @@ private fun DashboardContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Playlists",
+                text = stringResource(R.string.cloud_dashboard_title_playlists),
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -251,7 +288,7 @@ private fun DashboardContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text("Sync", fontFamily = GoogleSansRounded)
+                    Text(stringResource(R.string.cloud_dashboard_action_sync), fontFamily = GoogleSansRounded, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -275,14 +312,14 @@ private fun DashboardContent(
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        text = "No playlists synced yet",
+                        text = stringResource(R.string.cloud_dashboard_playlists_empty_title),
                         style = MaterialTheme.typography.bodyLarge,
                         fontFamily = GoogleSansRounded,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Tap sync to fetch your playlists",
+                        text = stringResource(R.string.cloud_dashboard_playlists_empty_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         fontFamily = GoogleSansRounded,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -332,14 +369,14 @@ private fun SubsonicMenuCard(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "Quick actions",
+                text = stringResource(R.string.cloud_dashboard_quick_actions),
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Manage Navidrome, Airsonic and other Subsonic-compatible servers.",
+                text = stringResource(R.string.subsonic_dashboard_quick_actions_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = GoogleSansRounded,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -365,7 +402,7 @@ private fun SubsonicMenuCard(
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Syncing", fontFamily = GoogleSansRounded)
+                        Text(stringResource(R.string.cloud_sync_status_syncing), fontFamily = GoogleSansRounded)
                     } else {
                         Icon(
                             Icons.Rounded.CloudSync,
@@ -373,7 +410,7 @@ private fun SubsonicMenuCard(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Sync library", fontFamily = GoogleSansRounded)
+                        Text(stringResource(R.string.cloud_dashboard_action_sync_library), fontFamily = GoogleSansRounded)
                     }
                 }
 
@@ -391,7 +428,7 @@ private fun SubsonicMenuCard(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Disconnect", fontFamily = GoogleSansRounded)
+                    Text(stringResource(R.string.cloud_dashboard_action_disconnect), fontFamily = GoogleSansRounded)
                 }
             }
         }
@@ -528,7 +565,7 @@ private fun PlaylistCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${playlist.songCount} songs",
+                    text = stringResource(R.string.cloud_dashboard_song_count, playlist.songCount),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = GoogleSansRounded,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -545,7 +582,7 @@ private fun PlaylistCard(
             ) {
                 Icon(
                     Icons.Rounded.Sync,
-                    contentDescription = "Sync",
+                    contentDescription = stringResource(R.string.cloud_cd_sync),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -561,7 +598,7 @@ private fun PlaylistCard(
             ) {
                 Icon(
                     Icons.Rounded.Delete,
-                    contentDescription = "Remove",
+                    contentDescription = stringResource(R.string.common_remove),
                     modifier = Modifier.size(20.dp)
                 )
             }

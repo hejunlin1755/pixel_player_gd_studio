@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -57,6 +58,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -82,7 +86,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -93,10 +96,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.theveloper.pixelplay.MainActivity
 import com.theveloper.pixelplay.R
@@ -108,10 +112,13 @@ import dagger.hilt.android.AndroidEntryPoint
 import org.drinkless.tdlib.TdApi
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import java.util.Locale
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 
 @AndroidEntryPoint
 class TelegramLoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             PixelPlayTheme {
@@ -149,6 +156,7 @@ fun TelegramLoginScreen(
     }
 
     val context = LocalContext.current
+    val defaultWorkingMessage = stringResource(R.string.telegram_working)
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -187,18 +195,13 @@ fun TelegramLoginScreen(
         }
     }
 
-    val gradientColors = listOf(
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-        MaterialTheme.colorScheme.surface
-    )
-
     Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Telegram Login",
+                        text = stringResource(R.string.telegram_login_title),
                         fontFamily = GoogleSansRounded,
                         style = MaterialTheme.typography.titleMedium
                     )
@@ -218,7 +221,7 @@ fun TelegramLoginScreen(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.common_back)
                         )
                     }
                 },
@@ -232,7 +235,7 @@ fun TelegramLoginScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Brush.verticalGradient(gradientColors))
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 20.dp),
@@ -258,7 +261,7 @@ fun TelegramLoginScreen(
                     enabled = false,
                     label = {
                         Text(
-                            text = "You are editing your number. Sending code again will replace the previous one.",
+                            text = stringResource(R.string.telegram_edit_number_chip),
                             fontFamily = GoogleSansRounded
                         )
                     },
@@ -279,7 +282,7 @@ fun TelegramLoginScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = uiState.loadingMessage.ifBlank { "Working..." },
+                            text = uiState.loadingMessage.ifBlank { defaultWorkingMessage },
                             style = MaterialTheme.typography.bodyMedium,
                             fontFamily = GoogleSansRounded,
                             color = MaterialTheme.colorScheme.onSurface
@@ -361,16 +364,18 @@ private fun resolveTelegramVisualStep(
     }
 }
 
-private fun authStateStatusMessage(state: TdApi.AuthorizationState?): String {
-    return when (state) {
-        null -> "Initializing Telegram..."
-        is TdApi.AuthorizationStateLoggingOut -> "Logging out..."
-        is TdApi.AuthorizationStateClosing -> "Closing session..."
-        is TdApi.AuthorizationStateClosed -> "Session closed. Re-open login to continue."
-        is TdApi.AuthorizationStateWaitTdlibParameters -> "Preparing secure Telegram session..."
-        else -> "Waiting for Telegram response..."
-    }
-}
+@Composable
+private fun authStateStatusMessage(state: TdApi.AuthorizationState?): String =
+    stringResource(
+        when (state) {
+            null -> R.string.telegram_status_initializing
+            is TdApi.AuthorizationStateLoggingOut -> R.string.telegram_status_logging_out
+            is TdApi.AuthorizationStateClosing -> R.string.telegram_status_closing
+            is TdApi.AuthorizationStateClosed -> R.string.telegram_status_closed
+            is TdApi.AuthorizationStateWaitTdlibParameters -> R.string.telegram_status_preparing
+            else -> R.string.telegram_status_waiting
+        }
+    )
 
 @Composable
 private fun TelegramBrandingHeader() {
@@ -393,7 +398,7 @@ private fun TelegramBrandingHeader() {
         Spacer(modifier = Modifier.height(18.dp))
 
         Text(
-            text = "Connect Telegram",
+            text = stringResource(R.string.telegram_connect),
             style = MaterialTheme.typography.headlineSmall,
             fontFamily = GoogleSansRounded,
             fontWeight = FontWeight.Bold,
@@ -403,7 +408,7 @@ private fun TelegramBrandingHeader() {
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Login with robust error handling, timeout control, and editable steps.",
+            text = stringResource(R.string.telegram_connect_subtitle),
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = GoogleSansRounded,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -483,7 +488,7 @@ private fun InlineErrorCard(
                     contentColor = MaterialTheme.colorScheme.onErrorContainer
                 )
             ) {
-                Icon(imageVector = Icons.Rounded.Clear, contentDescription = "Dismiss")
+                Icon(imageVector = Icons.Rounded.Clear, contentDescription = stringResource(R.string.common_dismiss))
             }
         }
     }
@@ -585,8 +590,8 @@ fun ExpressivePhoneNumberInput(
     ) {
         AuthStepHeader(
             icon = Icons.Rounded.Phone,
-            title = "Phone Number",
-            subtitle = "Enter your Telegram number. You can come back and edit it later."
+            title = stringResource(R.string.telegram_phone_number_title),
+            subtitle = stringResource(R.string.telegram_phone_number_subtitle)
         )
 
         Spacer(Modifier.height(24.dp))
@@ -624,7 +629,7 @@ fun ExpressivePhoneNumberInput(
                             )
                             Spacer(Modifier.width(12.dp))
                             Text(
-                                text = "Phone number",
+                                text = stringResource(R.string.telegram_phone_number_hint),
                                 style = MaterialTheme.typography.bodyLarge.copy(
                                     fontFamily = GoogleSansRounded,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
@@ -639,7 +644,7 @@ fun ExpressivePhoneNumberInput(
                                 .padding(horizontal = 16.dp)
                         ) {
                             Text(
-                                text = "+",
+                                text = stringResource(R.string.auth_plus_label),
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontFamily = GoogleSansRounded,
                                 fontWeight = FontWeight.SemiBold,
@@ -678,7 +683,7 @@ fun ExpressivePhoneNumberInput(
                                     Box(contentAlignment = Alignment.CenterStart) {
                                         if (countryCode.isEmpty()) {
                                             Text(
-                                                text = "1",
+                                                text = stringResource(R.string.telegram_phone_country_placeholder),
                                                 style = MaterialTheme.typography.bodyLarge.copy(
                                                     fontFamily = GoogleSansRounded,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
@@ -728,7 +733,7 @@ fun ExpressivePhoneNumberInput(
                                     Box(contentAlignment = Alignment.CenterStart) {
                                         if (localNumber.isEmpty()) {
                                             Text(
-                                                text = "5551234567",
+                                                text = stringResource(R.string.telegram_phone_local_placeholder),
                                                 style = MaterialTheme.typography.bodyLarge.copy(
                                                     fontFamily = GoogleSansRounded,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
@@ -747,7 +752,7 @@ fun ExpressivePhoneNumberInput(
 
             if (isExpanded) {
                 Text(
-                    text = "Phone number",
+                    text = stringResource(R.string.telegram_phone_number_hint),
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = GoogleSansRounded,
                         color = if (isActive) MaterialTheme.colorScheme.primary
@@ -766,7 +771,7 @@ fun ExpressivePhoneNumberInput(
         Spacer(Modifier.height(28.dp))
 
         ExpressiveButton(
-            text = "Send Code",
+            text = stringResource(R.string.telegram_send_code),
             onClick = onSend,
             enabled = countryCode.isNotEmpty() && localNumber.isNotBlank() && !isLoading,
             loading = isLoading
@@ -801,8 +806,8 @@ fun ExpressiveCodeInput(
     ) {
         AuthStepHeader(
             icon = Icons.Rounded.Sms,
-            title = "Verification Code",
-            subtitle = "Enter the code from Telegram. If the number is wrong, go back and edit it."
+            title = stringResource(R.string.telegram_verification_code_title),
+            subtitle = stringResource(R.string.telegram_verification_code_subtitle)
         )
 
         Spacer(Modifier.height(24.dp))
@@ -810,8 +815,8 @@ fun ExpressiveCodeInput(
         OutlinedTextField(
             value = code,
             onValueChange = { onCodeChanged(it.filter(Char::isDigit).take(8)) },
-            label = { Text("Code", fontFamily = GoogleSansRounded) },
-            placeholder = { Text("12345", fontFamily = GoogleSansRounded) },
+            label = { Text(stringResource(R.string.telegram_code_field_label), fontFamily = GoogleSansRounded) },
+            placeholder = { Text(stringResource(R.string.telegram_code_placeholder), fontFamily = GoogleSansRounded) },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Rounded.Sms,
@@ -845,17 +850,17 @@ fun ExpressiveCodeInput(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             TextButton(onClick = onEditPhone, enabled = !isLoading) {
-                Text(text = "Edit phone", fontFamily = GoogleSansRounded)
+                Text(text = stringResource(R.string.telegram_edit_phone), fontFamily = GoogleSansRounded, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             TextButton(onClick = onResendCode, enabled = !isLoading) {
-                Text(text = "Resend code", fontFamily = GoogleSansRounded)
+                Text(text = stringResource(R.string.telegram_resend_code), fontFamily = GoogleSansRounded, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
         Spacer(Modifier.height(18.dp))
 
         ExpressiveButton(
-            text = "Verify Code",
+            text = stringResource(R.string.telegram_verify_code),
             onClick = onCheck,
             enabled = code.length >= 3 && !isLoading,
             loading = isLoading
@@ -872,16 +877,37 @@ fun ExpressivePasswordInput(
     onCheck: () -> Unit,
     onEditPhone: () -> Unit
 ) {
-    val inputShape = AbsoluteSmoothCornerShape(
-        cornerRadiusTR = 16.dp,
-        cornerRadiusTL = 16.dp,
-        cornerRadiusBR = 16.dp,
-        cornerRadiusBL = 16.dp,
-        smoothnessAsPercentTR = 60,
-        smoothnessAsPercentTL = 60,
-        smoothnessAsPercentBR = 60,
-        smoothnessAsPercentBL = 60
-    )
+    // Local state so keystrokes don't push through the VM uiState on every char,
+    // which would recompose the whole login screen and cause input jank.
+    var localPassword by remember { mutableStateOf(password) }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    // Re-sync from VM only when it actively resets the password (e.g. auth state change).
+    LaunchedEffect(password) {
+        if (password.isEmpty() && localPassword.isNotEmpty()) {
+            localPassword = ""
+        }
+    }
+
+    val inputShape = remember {
+        AbsoluteSmoothCornerShape(
+            cornerRadiusTR = 16.dp,
+            cornerRadiusTL = 16.dp,
+            cornerRadiusBR = 16.dp,
+            cornerRadiusBL = 16.dp,
+            smoothnessAsPercentTR = 60,
+            smoothnessAsPercentTL = 60,
+            smoothnessAsPercentBR = 60,
+            smoothnessAsPercentBL = 60
+        )
+    }
+
+    val submitPassword = {
+        if (!isLoading && localPassword.isNotBlank()) {
+            onPasswordChanged(localPassword)
+            onCheck()
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -889,16 +915,16 @@ fun ExpressivePasswordInput(
     ) {
         AuthStepHeader(
             icon = Icons.Rounded.Lock,
-            title = "Two-Step Password",
-            subtitle = "Enter your Telegram password. You can still go back to fix your number."
+            title = stringResource(R.string.telegram_two_step_password_title),
+            subtitle = stringResource(R.string.telegram_two_step_password_subtitle)
         )
 
         Spacer(Modifier.height(24.dp))
 
         OutlinedTextField(
-            value = password,
-            onValueChange = onPasswordChanged,
-            label = { Text("Password", fontFamily = GoogleSansRounded) },
+            value = localPassword,
+            onValueChange = { localPassword = it },
+            label = { Text(stringResource(R.string.telegram_password_label), fontFamily = GoogleSansRounded) },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Rounded.Lock,
@@ -906,14 +932,20 @@ fun ExpressivePasswordInput(
                     tint = MaterialTheme.colorScheme.primary
                 )
             },
-            visualTransformation = PasswordVisualTransformation(),
+            trailingIcon = {
+                val image = if (passwordVisible) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff
+                val description = if (passwordVisible) "Hide password" else "Show password"
+
+                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                    Icon(imageVector = image, contentDescription = description, tint = MaterialTheme.colorScheme.primary)
+                }
+            },
+            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
             ),
-            keyboardActions = KeyboardActions(onDone = {
-                if (!isLoading) onCheck()
-            }),
+            keyboardActions = KeyboardActions(onDone = { submitPassword() }),
             singleLine = true,
             enabled = !isLoading,
             modifier = Modifier.fillMaxWidth(),
@@ -933,16 +965,16 @@ fun ExpressivePasswordInput(
             horizontalArrangement = Arrangement.End
         ) {
             TextButton(onClick = onEditPhone, enabled = !isLoading) {
-                Text(text = "Edit phone", fontFamily = GoogleSansRounded)
+                Text(text = stringResource(R.string.telegram_edit_phone), fontFamily = GoogleSansRounded, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
         Spacer(Modifier.height(18.dp))
 
         ExpressiveButton(
-            text = "Verify Password",
-            onClick = onCheck,
-            enabled = password.isNotBlank() && !isLoading,
+            text = stringResource(R.string.telegram_verify_password),
+            onClick = submitPassword,
+            enabled = localPassword.isNotBlank() && !isLoading,
             loading = isLoading
         )
     }
@@ -1023,7 +1055,7 @@ private fun ExpressiveButton(
     MediumExtendedFloatingActionButton(
         text = {
             Text(
-                text = if (loading) "Please wait..." else text,
+                text = if (loading) stringResource(R.string.telegram_please_wait) else text,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.SemiBold
             )

@@ -1,7 +1,15 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+import com.theveloper.pixelplay.presentation.navigation.navigateSafelyReplacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+
+import com.theveloper.pixelplay.presentation.components.MultiSelectionBottomSheet
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionActionRow
+import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -45,7 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.zIndex
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
@@ -53,13 +61,17 @@ import coil.request.ImageRequest
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Artist
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.preferences.AlbumArtPaletteStyle
+import com.theveloper.pixelplay.presentation.components.AutoScrollingTextOnDemand
 import com.theveloper.pixelplay.presentation.components.ExpressiveTopBarContent
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.presentation.components.GenreSortBottomSheet
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
 import com.theveloper.pixelplay.presentation.components.SmartImageCompactListTargetSize
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
+import com.theveloper.pixelplay.presentation.components.extractFastScrollGlyph
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.screens.QuickFillDialog
 import com.theveloper.pixelplay.presentation.viewmodel.GenreDetailListItem
@@ -71,11 +83,14 @@ import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StablePlayerState
 import com.theveloper.pixelplay.ui.theme.LocalPixelPlayDarkTheme
 import com.theveloper.pixelplay.utils.formatDuration
+import com.theveloper.pixelplay.utils.formatSongCount
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import kotlin.math.roundToInt
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
 
 // --- Data Models & Helpers ---
 
@@ -96,6 +111,26 @@ fun GenreDetailScreen(
     val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
     val libraryGenres by playerViewModel.genres.collectAsStateWithLifecycle()
     
+    val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+    val multiSelectionState = playerViewModel.multiSelectionStateHolder
+    val selectedSongs by multiSelectionState.selectedSongs.collectAsStateWithLifecycle()
+    val isSelectionMode by multiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
+    val selectedSongIds by multiSelectionState.selectedSongIds.collectAsStateWithLifecycle()
+    var showMultiSelectionSheet by remember { mutableStateOf(false) }
+    var playlistSheetSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+
+    BackHandler(enabled = isSelectionMode) {
+        multiSelectionState.clearSelection()
+    }
+
+    val onSongLongPress: (Song) -> Unit = remember(multiSelectionState, haptic) {
+        { song -> 
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            multiSelectionState.toggleSelection(song) 
+        }
+    }
+    
     // Defer heavy list rendering until navigation transition settles
     var isTransitionFinished by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -110,6 +145,7 @@ fun GenreDetailScreen(
     val lazyListState = rememberLazyListState()
 
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val minTopBarHeight = 58.dp + statusBarHeight // Reduced by 6dp from 64.dp
     val maxTopBarHeight = 200.dp
     val minTopBarHeightPx = with(density) { minTopBarHeight.toPx() }
@@ -121,8 +157,10 @@ fun GenreDetailScreen(
             1f - ((topBarHeight.value - minTopBarHeightPx) / (maxTopBarHeightPx - minTopBarHeightPx)).coerceIn(0f, 1f)
         }
     }
-    val showScrollBar by remember {
+    val isScrollbarEnabled = LocalShowScrollbar.current
+    val showScrollBar by remember(isScrollbarEnabled) {
         derivedStateOf {
+            isScrollbarEnabled &&
             collapseFraction > 0.95f &&
                 (lazyListState.canScrollForward || lazyListState.canScrollBackward)
         }
@@ -210,8 +248,20 @@ fun GenreDetailScreen(
             }
     }
     val genreDisplayName = themeGenre?.name ?: uiState.genre?.name ?: initialDisplayName
-    val genreShuffleLabel = "$genreDisplayName Shuffle"
+    val genreShuffleLabel = stringResource(R.string.genre_shuffle_label, genreDisplayName)
+    val genreFastScrollLabelProvider = remember(uiState.flattenedItems, uiState.sortOption) {
+        { index: Int ->
+            genreFastScrollLabel(
+                items = uiState.flattenedItems,
+                index = index,
+                sortOption = uiState.sortOption
+            )
+        }
+    }
     
+    val toastAddedToQueue = stringResource(R.string.library_toast_added_to_queue)
+    val toastPlayingNext = stringResource(R.string.library_toast_playing_next)
+
     // FAB Logic
     var showSortSheet by remember { mutableStateOf(false) }
     var showSongOptionsSheet by remember { mutableStateOf<Song?>(null) }
@@ -224,23 +274,27 @@ fun GenreDetailScreen(
     
     val customGenres by playerViewModel.customGenres.collectAsStateWithLifecycle()
     val customGenreIcons by playerViewModel.customGenreIcons.collectAsStateWithLifecycle()
+    val genrePaletteStyle by playerViewModel.albumArtPaletteStyle.collectAsStateWithLifecycle(
+        initialValue = AlbumArtPaletteStyle.default
+    )
     val isMiniPlayerVisible = stablePlayerState.currentSong != null
     val fabBottomPadding by animateDpAsState(
-        targetValue = if (isMiniPlayerVisible) MiniPlayerHeight + 16.dp else 16.dp,
+        targetValue = if (isMiniPlayerVisible) MiniPlayerHeight + systemNavBarInset + 16.dp else systemNavBarInset + 16.dp,
         label = "fabPadding"
     )
 
-    // Dynamic Theme
-    val genreColorScheme = remember(themeGenre, decodedGenreId, darkMode) {
-        com.theveloper.pixelplay.ui.theme.GenreThemeUtils.getGenreColorScheme(
-            genre = themeGenre,
-            genreIdFallback = decodedGenreId,
-            isDark = darkMode
-        )
-    }
-
     // Capture Neutral Colors from the App Theme (before overriding)
     val baseColorScheme = MaterialTheme.colorScheme
+
+    // Dynamic Theme
+    val genreColorScheme = remember(themeGenre, decodedGenreId, darkMode, genrePaletteStyle) {
+        com.theveloper.pixelplay.ui.theme.GenreThemeUtils.getGenreDetailColorScheme(
+            genre = themeGenre,
+            fallbackGenreId = decodedGenreId,
+            isDark = darkMode,
+            paletteStyle = genrePaletteStyle
+        )
+    }
 
     MaterialTheme(colorScheme = genreColorScheme) {
         Box(
@@ -298,13 +352,19 @@ fun GenreDetailScreen(
                             )
                         }
                         is GenreDetailListItem.SongItem -> {
+                            val isSelected = selectedSongIds.contains(item.song.id)
+                            val selectionIndex = multiSelectionState.getSelectionIndex(item.song.id)
                             GenreSongItemWrapper(
                                 item = item,
                                 stablePlayerState = stablePlayerState,
                                 onSongClick = { song ->
                                     playerViewModel.showAndPlaySong(song, uiState.sortedSongs, genreDisplayName)
                                 },
-                                onMoreOptionsClick = { song -> showSongOptionsSheet = song }
+                                onMoreOptionsClick = { song -> showSongOptionsSheet = song },
+                                isSelectionMode = isSelectionMode,
+                                isSelected = isSelected,
+                                selectionIndex = selectionIndex,
+                                onLongPress = { onSongLongPress(item.song) }
                             )
                         }
                         is GenreDetailListItem.Spacer -> {
@@ -341,7 +401,8 @@ fun GenreDetailScreen(
                         .padding(
                             top = minTopBarHeight + 12.dp, // Stable padding for performance
                             bottom = fabBottomPadding + 112.dp // Stable padding
-                        )
+                        ),
+                    dragLabelProvider = genreFastScrollLabelProvider
                 )
             }
 
@@ -358,24 +419,65 @@ fun GenreDetailScreen(
                 collapsedContentColor = MaterialTheme.colorScheme.onSurface
             )
         
-            // FAB
+            // Selection Count Pill (Top-Center below collapsed top bar)
+            SelectionCountPill(
+                selectedCount = selectedSongs.size,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(6f)
+                    .padding(top = minTopBarHeight + 24.dp)
+            )
+
+            // FAB / SelectionActionRow (Bottom-Center or Bottom-End)
             Box(
                  modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(bottom = fabBottomPadding + 26.dp, end = 16.dp)
+                    .align(if (isSelectionMode) Alignment.BottomCenter else Alignment.BottomEnd)
+                    .padding(
+                        bottom = fabBottomPadding + if (isSelectionMode) 16.dp else 26.dp,
+                        start = if (isSelectionMode) 16.dp else 0.dp,
+                        end = 16.dp
+                    )
+                    .run {
+                        if (isSelectionMode) fillMaxWidth() else this
+                    }
                     .zIndex(10f) // Ensure FAB is above everything
             ) {
-                 MediumFloatingActionButton(
-                    onClick = { showSortSheet = true },
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                    shape = AbsoluteSmoothCornerShape(24.dp, 60)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Options",
-                        modifier = Modifier.size(28.dp)
-                    )
+                if (isSelectionMode) {
+                    Card(
+                        shape = AbsoluteSmoothCornerShape(28.dp, 60),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SelectionActionRow(
+                            selectedCount = selectedSongs.size,
+                            onSelectAll = {
+                                multiSelectionState.selectAll(uiState.songs)
+                            },
+                            onDeselect = {
+                                multiSelectionState.clearSelection()
+                            },
+                            onOptionsClick = {
+                                showMultiSelectionSheet = true
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+                } else {
+                     MediumFloatingActionButton(
+                        onClick = { showSortSheet = true },
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = AbsoluteSmoothCornerShape(24.dp, 60)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = stringResource(R.string.common_options),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
         
@@ -401,7 +503,7 @@ fun GenreDetailScreen(
                                     showSortSheet = false
                                     showQuickFillDialog = true
                                 },
-                                modifier = Modifier.fillMaxWidth().height(56.dp),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -410,10 +512,13 @@ fun GenreDetailScreen(
                             ) {
                                 Icon(Icons.Rounded.AutoFixHigh, contentDescription = null)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Quick Fill Genre",
+                                TightWrapText(
+                                    text = stringResource(R.string.genre_quick_fill),
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 22.sp
                                 )
                             }
                         }
@@ -458,43 +563,65 @@ fun GenreDetailScreen(
                         onDismiss = { showSongOptionsSheet = null },
                         onPlaySong = {
                             playerViewModel.showAndPlaySong(song, uiState.sortedSongs, genreDisplayName)
-                            showSongOptionsSheet = null
                         },
                         onAddToQueue = {
                             playerViewModel.addSongToQueue(song)
-                            showSongOptionsSheet = null
-                            playerViewModel.sendToast("Added to the queue")
+                            playerViewModel.sendToast(toastAddedToQueue)
                         },
                         onAddNextToQueue = {
                             playerViewModel.addSongNextToQueue(song)
-                            showSongOptionsSheet = null
-                            playerViewModel.sendToast("Will play next")
+                            playerViewModel.sendToast(toastPlayingNext)
                         },
                         onAddToPlayList = {
                             showPlaylistBottomSheet = true
                         },
                         onDeleteFromDevice = playerViewModel::deleteFromDevice,
                         onNavigateToAlbum = {
-                            com.theveloper.pixelplay.presentation.navigation.Screen.AlbumDetail.createRoute(song.albumId).let { route ->
-                                navController.navigateSafely(route)
-                            }
+                            navController.navigateSafelyReplacing(
+                                route = com.theveloper.pixelplay.presentation.navigation.Screen.AlbumDetail.createRoute(song.albumId),
+                                patternToPop = com.theveloper.pixelplay.presentation.navigation.Screen.AlbumDetail.route
+                            )
                             showSongOptionsSheet = null
                         },
                         onNavigateToArtist = {
-                            com.theveloper.pixelplay.presentation.navigation.Screen.ArtistDetail.createRoute(song.artistId).let { route ->
-                                navController.navigateSafely(route)
-                            }
+                            navController.navigateSafelyReplacing(
+                                route = com.theveloper.pixelplay.presentation.navigation.Screen.ArtistDetail.createRoute(song.artistId),
+                                patternToPop = com.theveloper.pixelplay.presentation.navigation.Screen.ArtistDetail.route
+                            )
+                            showSongOptionsSheet = null
+                        },
+                        onNavigateToArtistById = { artistId ->
+                            navController.navigateSafelyReplacing(
+                                route = com.theveloper.pixelplay.presentation.navigation.Screen.ArtistDetail.createRoute(artistId),
+                                patternToPop = com.theveloper.pixelplay.presentation.navigation.Screen.ArtistDetail.route
+                            )
                             showSongOptionsSheet = null
                         },
                         onNavigateToGenre = {
                             song.genre?.let {
-                                val route = com.theveloper.pixelplay.presentation.navigation.Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8"))
-                                navController.navigateSafely(route)
+                                navController.navigateSafelyReplacing(
+                                    route = com.theveloper.pixelplay.presentation.navigation.Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")),
+                                    patternToPop = com.theveloper.pixelplay.presentation.navigation.Screen.GenreDetail.route
+                                )
                             }
                             showSongOptionsSheet = null
                         },
-                        onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate ->
-                            playerViewModel.editSongMetadata(song, newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate)
+                        onEditSong = { newTitle, newArtist, newAlbum, newAlbumArtist, newComposer, newGenre, newLyrics, newTrackNumber, newDiscNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
+                            playerViewModel.editSongMetadata(
+                                song,
+                                newTitle,
+                                newArtist,
+                                newAlbum,
+                                newAlbumArtist,
+                                newComposer,
+                                newGenre,
+                                newLyrics,
+                                newTrackNumber,
+                                newDiscNumber,
+                                replayGainTrackGainDb,
+                                replayGainAlbumGainDb,
+                                coverArtUpdate
+                            )
                         },
                         generateAiMetadata = { fields ->
                             playerViewModel.generateAiMetadata(song, fields)
@@ -503,15 +630,6 @@ fun GenreDetailScreen(
                     )
                 }
 
-                if (showPlaylistBottomSheet) {
-                    com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet(
-                        playlistUiState = playlistUiState,
-                        songs = listOf(song),
-                        onDismiss = { showPlaylistBottomSheet = false },
-                        bottomBarHeight = 0.dp, // Or calculate if needed
-                        playerViewModel = playerViewModel
-                    )
-                }
             }
         
             // Loading/Error States
@@ -520,7 +638,126 @@ fun GenreDetailScreen(
             }
         }
     }
+
+    // Multi-Selection Bottom Sheet
+    if (showMultiSelectionSheet && selectedSongs.isNotEmpty()) {
+        val activity = context as? android.app.Activity
+        val favoriteIds = favoriteSongIds.toSet()
+
+        MultiSelectionBottomSheet(
+            selectedSongs = selectedSongs,
+            favoriteSongIds = favoriteIds,
+            onDismiss = { showMultiSelectionSheet = false },
+            onPlayAll = {
+                playerViewModel.playSelectedSongs(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onAddToQueue = {
+                playerViewModel.addSelectedToQueue(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onPlayNext = {
+                playerViewModel.addSelectedAsNext(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onAddToPlaylist = {
+                playlistSheetSongs = selectedSongs
+                showMultiSelectionSheet = false
+                showPlaylistBottomSheet = true
+            },
+            onToggleLikeAll = { shouldLike ->
+                if (shouldLike) {
+                    playerViewModel.likeSelectedSongs(selectedSongs)
+                } else {
+                    playerViewModel.unlikeSelectedSongs(selectedSongs)
+                }
+                showMultiSelectionSheet = false
+            },
+            onShareAll = {
+                playerViewModel.shareSelectedAsZip(selectedSongs)
+                showMultiSelectionSheet = false
+            },
+            onDeleteAll = { _, onComplete ->
+                activity?.let {
+                    playerViewModel.deleteSelectedFromDevice(it, selectedSongs) {
+                        showMultiSelectionSheet = false
+                        onComplete(true)
+                    }
+                }
+            },
+            onBatchEdit = {
+                showMultiSelectionSheet = false
+            }
+        )
+    }
+
+    // Playlist Bottom Sheet (Single or Multi additions)
+    if (showPlaylistBottomSheet) {
+        val songsToAddToPlaylist = if (playlistSheetSongs.isNotEmpty()) {
+            playlistSheetSongs
+        } else {
+            showSongOptionsSheet?.let { listOf(it) } ?: emptyList()
+        }
+
+        if (songsToAddToPlaylist.isNotEmpty()) {
+            com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet(
+                playlistUiState = playlistUiState,
+                songs = songsToAddToPlaylist,
+                onDismiss = {
+                    showPlaylistBottomSheet = false
+                    playlistSheetSongs = emptyList()
+                },
+                bottomBarHeight = systemNavBarInset,
+                playerViewModel = playerViewModel
+            )
+        }
+    }
 }
+
+private fun genreFastScrollLabel(
+    items: List<GenreDetailListItem>,
+    index: Int,
+    sortOption: SortOption
+): String? {
+    if (items.isEmpty()) return null
+
+    val clampedIndex = index.coerceIn(0, items.lastIndex)
+    for (candidateIndex in clampedIndex downTo 0) {
+        val label = items[candidateIndex].fastScrollLabel(sortOption)
+        if (!label.isNullOrBlank()) {
+            return label
+        }
+    }
+
+    return null
+}
+
+private fun GenreDetailListItem.fastScrollLabel(sortOption: SortOption): String? =
+    when (sortOption) {
+        SortOption.ARTIST -> when (this) {
+            is GenreDetailListItem.ArtistHeader -> extractFastScrollGlyph(artistName)
+            is GenreDetailListItem.AlbumHeader -> extractFastScrollGlyph(album.songs.firstOrNull()?.artist)
+            is GenreDetailListItem.SongItem -> extractFastScrollGlyph(song.artist)
+            is GenreDetailListItem.Spacer,
+            is GenreDetailListItem.Divider -> null
+        }
+
+        SortOption.ALBUM -> when (this) {
+            is GenreDetailListItem.ArtistHeader -> null
+            is GenreDetailListItem.AlbumHeader -> extractFastScrollGlyph(album.name)
+            is GenreDetailListItem.SongItem -> extractFastScrollGlyph(song.album)
+            is GenreDetailListItem.Spacer,
+            is GenreDetailListItem.Divider -> null
+        }
+
+        SortOption.TITLE -> when (this) {
+            is GenreDetailListItem.ArtistHeader -> null
+            is GenreDetailListItem.AlbumHeader -> null
+            is GenreDetailListItem.SongItem -> extractFastScrollGlyph(song.title)
+            is GenreDetailListItem.Spacer,
+            is GenreDetailListItem.Divider -> null
+        }
+    }
 
 // --- Top Bar Component ---
 @Composable
@@ -583,7 +820,7 @@ fun GenreCollapsibleTopBar(
                     contentColor = animatedContentColor
                 )
             ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = animatedContentColor)
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = animatedContentColor)
             }
 
             ExpressiveTopBarContent(
@@ -658,7 +895,7 @@ fun GenreArtistHeader(
                     } else {
                         Icon(
                             imageVector = Icons.Rounded.Person,
-                            contentDescription = "Generic Artist",
+                            contentDescription = stringResource(R.string.genre_cd_generic_artist),
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier
                                 .padding(10.dp)
@@ -723,15 +960,25 @@ fun GenreAlbumHeader(
             )
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
+                val shouldScroll = album.name.length > 20
+                if (shouldScroll) {
+                    AutoScrollingTextOnDemand(
+                        text = album.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        gradientEdgeColor = MaterialTheme.colorScheme.surface,
+                        expansionFractionProvider = { 1f },
+                    )
+                } else {
+                    Text(
+                        text = album.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
                 Text(
-                    text = album.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "${album.songs.size} songs",
+                    text = formatSongCount(album.songs.size),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -745,7 +992,7 @@ fun GenreAlbumHeader(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = "Play Album")
+                Icon(Icons.Rounded.PlayArrow, contentDescription = stringResource(R.string.common_play_album))
             }
         }
     }
@@ -756,7 +1003,11 @@ fun GenreSongItemWrapper(
     item: com.theveloper.pixelplay.presentation.viewmodel.GenreDetailListItem.SongItem,
     stablePlayerState: StablePlayerState,
     onSongClick: (Song) -> Unit,
-    onMoreOptionsClick: (Song) -> Unit
+    onMoreOptionsClick: (Song) -> Unit,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    selectionIndex: Int? = null,
+    onLongPress: () -> Unit = {}
 ) {
     val song = item.song
     val isFirstInAlbum = item.isFirstInAlbum
@@ -808,7 +1059,11 @@ fun GenreSongItemWrapper(
                  showAlbumArt = false,
                  customShape = songItemShape,
                  onClick = { onSongClick(song) },
-                 onMoreOptionsClick = onMoreOptionsClick
+                 onMoreOptionsClick = onMoreOptionsClick,
+                 isSelected = isSelected,
+                 selectionIndex = selectionIndex,
+                 isSelectionMode = isSelectionMode,
+                 onLongPress = onLongPress
              )
              
              if (isLastInAlbum) Spacer(Modifier.height(8.dp))

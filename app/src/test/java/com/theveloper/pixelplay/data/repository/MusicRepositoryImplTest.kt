@@ -55,6 +55,7 @@ class MusicRepositoryImplTest {
         // Mockear los flows de preferencias por defecto, pueden ser sobrescritos por test
         coEvery { mockUserPreferencesRepository.allowedDirectoriesFlow } returns flowOf(emptySet())
         coEvery { mockUserPreferencesRepository.blockedDirectoriesFlow } returns flowOf(setOf("/dummy"))
+        every { mockUserPreferencesRepository.mockGenresEnabledFlow } returns flowOf(false)
         coEvery { mockUserPreferencesRepository.initialSetupDoneFlow } returns flowOf(true)
         coEvery { mockUserPreferencesRepository.isFolderFilterActiveFlow } returns flowOf(false)
         // Populate artists
@@ -64,6 +65,7 @@ class MusicRepositoryImplTest {
         )
         every { mockMusicDao.getAllArtistsRaw() } returns flowOf(dummyArtists)
         coEvery { mockMusicDao.getDistinctParentDirectories() } returns listOf("/music/folder1", "/music/folder2")
+        every { mockMusicDao.getDistinctParentDirectoriesFlow() } returns flowOf(listOf("/music/folder1", "/music/folder2"))
         every { mockTelegramCacheManagerProvider.get() } returns mockTelegramCacheManager
         every { mockTelegramRepositoryProvider.get() } returns mockTelegramRepository
 
@@ -80,11 +82,11 @@ class MusicRepositoryImplTest {
             if (allowedParams.isEmpty()) flowOf(emptyList()) else flowOf(emptyList()) // Placeholder, can be improved if needed
         }
         every { mockMusicDao.getSongs(any(), eq(false)) } returns flowOf(emptyList()) // Placeholder
-        every { mockMusicDao.getAlbums(any(), eq(true), any()) } answers {
+        every { mockMusicDao.getAlbums(any(), eq(true), any(), any()) } answers {
             val allowedParams = firstArg<List<String>>()
             if (allowedParams.isEmpty()) flowOf(emptyList()) else flowOf(emptyList())
         }
-        every { mockMusicDao.getAlbums(any(), eq(false), any()) } returns flowOf(emptyList())
+        every { mockMusicDao.getAlbums(any(), eq(false), any(), any()) } returns flowOf(emptyList())
         
         every { mockMusicDao.getArtists(any(), eq(true)) } answers {
              val allowedParams = firstArg<List<String>>()
@@ -201,7 +203,7 @@ class MusicRepositoryImplTest {
                 else -> album
             }
         }.filter { it.id == 201L || it.id == 203L }
-        every { mockMusicDao.getAlbums(any(), eq(true), any()) } returns flowOf(expectedAlbums)
+        every { mockMusicDao.getAlbums(any(), eq(true), any(), any()) } returns flowOf(expectedAlbums)
 
         every { mockUserPreferencesRepository.allowedDirectoriesFlow } returns flowOf(allowedDirs)
         every { mockUserPreferencesRepository.initialSetupDoneFlow } returns flowOf(true)
@@ -314,6 +316,35 @@ class MusicRepositoryImplTest {
         assertEquals(2, result.size)
         assertTrue(result.any { it.id == "rock" })
         assertEquals(1, result.count { it.id == "unknown" })
+    }
+
+    @Test
+    fun `getMusicByGenre includes compact comma separated genre matches`() = runTest(testDispatcher) {
+        val matchingSong = createSongEntity(
+            id = 1L,
+            title = "Song A",
+            artistName = "Artist 1",
+            genre = "Rock,Pop",
+            filePath = "/music/songA.mp3",
+            parentDirectoryPath = "/music"
+        )
+        every {
+            mockMusicDao.getSongsByGenreContaining(
+                eq("Pop"),
+                eq("Pop,%"),
+                eq("%, Pop"),
+                eq("%,Pop"),
+                eq("%, Pop,%"),
+                eq("%,Pop,%"),
+                any(),
+                eq(true)
+            )
+        } returns flowOf(listOf(matchingSong))
+
+        val result = musicRepository.getMusicByGenre("Pop").first()
+
+        assertEquals(1, result.size)
+        assertEquals("Song A", result.first().title)
     }
 
     @Nested

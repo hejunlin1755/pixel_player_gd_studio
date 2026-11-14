@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.theveloper.pixelplay.data.equalizer.EqualizerManager
 import com.theveloper.pixelplay.data.equalizer.EqualizerPreset
 import com.theveloper.pixelplay.data.preferences.EqualizerPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.EqualizerViewMode
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.service.player.DualPlayerEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,6 +18,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -38,7 +42,7 @@ data class EqualizerUiState(
     val isBassBoostSupported: Boolean = true,
     val isVirtualizerSupported: Boolean = true,
     val isLoudnessEnhancerSupported: Boolean = true,
-    val viewMode: UserPreferencesRepository.EqualizerViewMode = UserPreferencesRepository.EqualizerViewMode.SLIDERS,
+    val viewMode: EqualizerViewMode = EqualizerViewMode.SLIDERS,
     val isBassBoostDismissed: Boolean = false,
     val isVirtualizerDismissed: Boolean = false,
     val isLoudnessDismissed: Boolean = false,
@@ -66,7 +70,7 @@ class EqualizerViewModel @Inject constructor(
     private val equalizerManager: EqualizerManager,
     private val equalizerPreferencesRepository: EqualizerPreferencesRepository,
     private val dualPlayerEngine: DualPlayerEngine,
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
+    @param:dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
     
     companion object {
@@ -205,7 +209,7 @@ class EqualizerViewModel @Inject constructor(
                  val bbDismissed = values[9] as Boolean
                  val vDismissed = values[10] as Boolean
                  val lDismissed = values[11] as Boolean
-                 val viewMode = values[12] as UserPreferencesRepository.EqualizerViewMode
+                 val viewMode = values[12] as EqualizerViewMode
                  val customPresets = (values[13] as? List<*>)?.filterIsInstance<EqualizerPreset>() ?: emptyList()
                  val pinnedPresets = (values[14] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
 
@@ -250,9 +254,9 @@ class EqualizerViewModel @Inject constructor(
         viewModelScope.launch {
             val currentMode = _uiState.value.viewMode
             val nextMode = when (currentMode) {
-                UserPreferencesRepository.EqualizerViewMode.SLIDERS -> UserPreferencesRepository.EqualizerViewMode.GRAPH
-                UserPreferencesRepository.EqualizerViewMode.GRAPH -> UserPreferencesRepository.EqualizerViewMode.HYBRID
-                UserPreferencesRepository.EqualizerViewMode.HYBRID -> UserPreferencesRepository.EqualizerViewMode.SLIDERS
+                EqualizerViewMode.SLIDERS -> EqualizerViewMode.GRAPH
+                EqualizerViewMode.GRAPH -> EqualizerViewMode.HYBRID
+                EqualizerViewMode.HYBRID -> EqualizerViewMode.SLIDERS
             }
             equalizerPreferencesRepository.setEqualizerViewMode(nextMode)
         }
@@ -485,12 +489,11 @@ class EqualizerViewModel @Inject constructor(
             equalizerManager.attachToAudioSessionIfNeeded(audioSessionId)
         }
     }
-    
-    override fun onCleared() {
-        // Flush latest state synchronously to avoid losing debounced values when the screen/app closes.
-        runCatching {
-            kotlinx.coroutines.runBlocking {
-                val latest = _uiState.value
+
+    private fun persistLatestStateAsync() {
+        val latest = _uiState.value
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
                 equalizerPreferencesRepository.setEqualizerEnabled(latest.isEnabled)
                 equalizerPreferencesRepository.setEqualizerPreset(latest.currentPreset.name)
                 equalizerPreferencesRepository.setEqualizerCustomBands(equalizerManager.bandLevels.value)
@@ -500,15 +503,18 @@ class EqualizerViewModel @Inject constructor(
                 equalizerPreferencesRepository.setVirtualizerStrength(latest.virtualizerStrength.toInt().coerceIn(0, 1000))
                 equalizerPreferencesRepository.setLoudnessEnhancerEnabled(latest.loudnessEnhancerEnabled)
                 equalizerPreferencesRepository.setLoudnessEnhancerStrength(latest.loudnessEnhancerStrength.toInt().coerceIn(0, 1000))
+            }.onFailure { error ->
+                Timber.tag(TAG).w(error, "Failed to flush equalizer state during onCleared")
             }
-        }.onFailure { error ->
-            Timber.tag(TAG).w(error, "Failed to flush equalizer state during onCleared")
         }
-
+    }
+    
+    override fun onCleared() {
         persistBandLevelsJob?.cancel()
         persistBassBoostJob?.cancel()
         persistVirtualizerJob?.cancel()
         persistLoudnessJob?.cancel()
+        persistLatestStateAsync()
         super.onCleared()
         // Don't release equalizer here - it should persist across screen navigation
         Timber.tag(TAG).d("ViewModel cleared")

@@ -38,6 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.theveloper.pixelplay.utils.CrashLogData
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 
 /**
  * Material3 Expressive styled dialog that displays crash information
@@ -49,6 +51,10 @@ fun CrashReportDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardLabel = stringResource(R.string.crash_report_clipboard_label)
+    val toastCrashLogCopied = stringResource(R.string.crash_report_toast_log_copied)
+    val shareSubject = stringResource(R.string.crash_report_share_subject)
+    val shareChooserTitle = stringResource(R.string.crash_report_share_chooser)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -62,7 +68,7 @@ fun CrashReportDialog(
         },
         title = {
             Text(
-                text = "Oops! Something went wrong",
+                text = stringResource(R.string.crash_report_title),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -74,7 +80,7 @@ fun CrashReportDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "The app crashed during your last session. Help us fix this by sharing the crash report.",
+                    text = stringResource(R.string.crash_report_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -89,7 +95,7 @@ fun CrashReportDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
-                            text = "Date: ${crashLog.formattedDate}",
+                            text = stringResource(R.string.crash_report_date_line, crashLog.formattedDate),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -97,7 +103,7 @@ fun CrashReportDialog(
                         Spacer(modifier = Modifier.height(8.dp))
                         
                         Text(
-                            text = "Error:",
+                            text = stringResource(R.string.crash_report_error_label),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.error
@@ -117,7 +123,7 @@ fun CrashReportDialog(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Stack trace (preview):",
+                            text = stringResource(R.string.crash_report_stack_preview_label),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -147,9 +153,12 @@ fun CrashReportDialog(
                     FilledTonalButton(
                         onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = ClipData.newPlainText("Crash Log", crashLog.getFullLog())
+                            val clip = ClipData.newPlainText(
+                                clipboardLabel,
+                                crashLog.getFullLog(),
+                            )
                             clipboard.setPrimaryClip(clip)
-                            Toast.makeText(context, "Crash log copied to clipboard", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, toastCrashLogCopied, Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -159,17 +168,19 @@ fun CrashReportDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Copy")
+                        Text(stringResource(R.string.common_copy))
                     }
 
                     FilledTonalButton(
                         onClick = {
                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "PixelPlayer Crash Report")
+                                putExtra(Intent.EXTRA_SUBJECT, shareSubject)
                                 putExtra(Intent.EXTRA_TEXT, crashLog.getFullLog())
                             }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share crash report"))
+                            context.startActivity(
+                                Intent.createChooser(shareIntent, shareChooserTitle),
+                            )
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -179,7 +190,7 @@ fun CrashReportDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Share")
+                        Text(stringResource(R.string.common_share))
                     }
                 }
             }
@@ -187,7 +198,7 @@ fun CrashReportDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Dismiss")
+                Text(stringResource(R.string.common_dismiss), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     )

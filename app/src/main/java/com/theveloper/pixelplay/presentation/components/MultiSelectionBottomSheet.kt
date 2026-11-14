@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FolderZip
@@ -62,6 +64,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.size.Size
 import com.theveloper.pixelplay.data.model.Song
@@ -84,6 +87,11 @@ import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
  * @param onDeleteAll Delete all from device (with confirmation)
  */
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import com.theveloper.pixelplay.R
+import com.theveloper.pixelplay.presentation.components.subcomps.AutoSizingTextToFill
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -97,7 +105,8 @@ fun MultiSelectionBottomSheet(
     onAddToPlaylist: () -> Unit,
     onToggleLikeAll: (shouldLike: Boolean) -> Unit,
     onShareAll: () -> Unit,
-    onDeleteAll: (activity: Activity, onResult: (Boolean) -> Unit) -> Unit
+    onDeleteAll: (activity: Activity, onResult: (Boolean) -> Unit) -> Unit,
+    onBatchEdit: () -> Unit
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -156,12 +165,10 @@ fun MultiSelectionBottomSheet(
                 // Header with stacked album arts and count - row anchored left
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp),
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Stacked album arts
                     // Stacked album arts - use calculated width to avoid overlap
                     val stackedImageSize = 66.dp
                     val stackedOverlap = 33.dp
@@ -176,33 +183,60 @@ fun MultiSelectionBottomSheet(
                             .height(74.dp)
                             .width(stackedWidth)
                     )
-                    
-                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Spacer(Modifier.width(10.dp))
                     
                     // Song count and label
-                    Column {
-                        Text(
-                            text = "${selectedSongs.size} SONGS",
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .wrapContentHeight(),
+                        verticalArrangement = Arrangement.Center
+                    ){
+                        AutoSizingTextToFill(
+                            text = stringResource(R.string.multi_selection_songs_count_upper, selectedSongs.size),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             fontFamily = GoogleSansRounded,
-                            color = MaterialTheme.colorScheme.onSurface
+                            modifier = Modifier.padding(end = 4.dp),
+                            minFontSize = 16.sp,
+                            maxFontSizeLimit = 24.sp,
+                            maxLines = 2,
                         )
-                        Spacer(
-                            modifier = Modifier
-                                .height(4.dp)
-                                //.fillMaxWidth()
-                        )
+                        Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "selected",
+                            text = stringResource(R.string.multi_selection_songs_selected),
                             style = MaterialTheme.typography.bodyLarge,
+                            fontFamily = GoogleSansRounded,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontFamily = GoogleSansRounded
+                            overflow = TextOverflow.Ellipsis,
+                            maxLines = 1,
+                        )
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    //Batch edit button
+                    FilledTonalIconButton(
+                        modifier = Modifier
+                            .height(74.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceBright,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        onClick = {
+                            onBatchEdit()
+                        },
+                    ) {
+                        Icon(
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                            imageVector = Icons.Rounded.Edit,
+                            contentDescription = stringResource(R.string.song_info_cd_edit_metadata)
                         )
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 
                 // Actions list
                 LazyColumn(
@@ -219,27 +253,35 @@ fun MultiSelectionBottomSheet(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            MediumExtendedFloatingActionButton(
+                            FilledTonalButton(
                                 modifier = Modifier
                                     .weight(0.5f)
-                                    .fillMaxHeight(),
+                                    .heightIn(min = 80.dp),
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
+                                shape = buttonShape,
                                 onClick = {
                                     onPlayAll()
                                     onDismiss()
-                                },
-                                elevation = FloatingActionButtonDefaults.elevation(0.dp),
-                                shape = buttonShape,
-                                icon = {
-                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Play all")
-                                },
-                                text = {
-                                    Text(
-                                        modifier = Modifier.padding(end = 0.dp),
-                                        style = MaterialTheme.typography.titleMediumEmphasized,
-                                        text = "Play All"
-                                    )
                                 }
-                            )
+                            ) {
+                                Icon(
+                                    Icons.Rounded.PlayArrow,
+                                    contentDescription = stringResource(R.string.song_info_cd_play_all),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                TightWrapText(
+                                    text = stringResource(R.string.song_info_action_play_all),
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 22.sp,
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                            }
                             // Like/Unlike toggle button
                             // If all are liked -> clicking will unlike all
                             // If any is not liked -> clicking will like all
@@ -263,7 +305,9 @@ fun MultiSelectionBottomSheet(
                                         Icons.Rounded.HeartBroken 
                                     else
                                         Icons.Rounded.FavoriteBorder,
-                                    contentDescription = if (allAreLiked) "Unlike all" else "Like all"
+                                    contentDescription = stringResource(
+                                        if (allAreLiked) R.string.song_info_cd_remove_from_favorites_all else R.string.song_info_cd_add_to_favorites_all
+                                    )
                                 )
                             }
                             
@@ -284,7 +328,7 @@ fun MultiSelectionBottomSheet(
                                 Icon(
                                     modifier = Modifier.size(FloatingActionButtonDefaults.LargeIconSize),
                                     imageVector = Icons.Rounded.Share,
-                                    contentDescription = "Share all as ZIP"
+                                    contentDescription = stringResource(R.string.song_info_cd_share_all_as_zip)
                                 )
                             }
                         }
@@ -307,7 +351,7 @@ fun MultiSelectionBottomSheet(
                                     containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                                 ),
-                                contentPadding = PaddingValues(horizontal = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
                                 shape = CircleShape,
                                 onClick = {
                                     onAddToQueue()
@@ -316,10 +360,16 @@ fun MultiSelectionBottomSheet(
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Rounded.QueueMusic,
-                                    contentDescription = "Add all to Queue"
+                                    contentDescription = stringResource(R.string.song_info_cd_add_to_queue)
                                 )
-                                Spacer(Modifier.width(14.dp))
-                                Text("Add to Queue")
+                                Spacer(Modifier.width(6.dp))
+                                TightWrapText(
+                                    text = stringResource(R.string.song_info_action_add_to_queue),
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 20.sp
+                                )
                             }
                             
                             FilledTonalButton(
@@ -330,7 +380,7 @@ fun MultiSelectionBottomSheet(
                                     containerColor = MaterialTheme.colorScheme.tertiary,
                                     contentColor = MaterialTheme.colorScheme.onTertiary
                                 ),
-                                contentPadding = PaddingValues(horizontal = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
                                 shape = CircleShape,
                                 onClick = {
                                     onPlayNext()
@@ -339,10 +389,16 @@ fun MultiSelectionBottomSheet(
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.QueueMusic,
-                                    contentDescription = "Play Next"
+                                    contentDescription = stringResource(R.string.song_info_cd_queue_next)
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Next")
+                                Spacer(Modifier.width(6.dp))
+                                TightWrapText(
+                                    text = stringResource(R.string.song_info_action_queue_next),
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 20.sp
+                                )
                             }
                         }
                     }
@@ -364,6 +420,7 @@ fun MultiSelectionBottomSheet(
                                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                 ),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
                                 shape = CircleShape,
                                 onClick = {
                                     onAddToPlaylist()
@@ -372,10 +429,16 @@ fun MultiSelectionBottomSheet(
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Rounded.PlaylistAdd,
-                                    contentDescription = "Add to Playlist"
+                                    contentDescription = stringResource(R.string.song_info_cd_add_to_playlist)
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Playlist")
+                                Spacer(Modifier.width(6.dp))
+                                TightWrapText(
+                                    text = stringResource(R.string.common_playlist),
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 20.sp
+                                )
                             }
                             
                             FilledTonalButton(
@@ -386,6 +449,7 @@ fun MultiSelectionBottomSheet(
                                     containerColor = MaterialTheme.colorScheme.errorContainer,
                                     contentColor = MaterialTheme.colorScheme.onErrorContainer
                                 ),
+                                contentPadding = PaddingValues(horizontal = 10.dp),
                                 shape = CircleShape,
                                 onClick = {
                                     val activity = (context as? Activity)
@@ -398,10 +462,16 @@ fun MultiSelectionBottomSheet(
                             ) {
                                 Icon(
                                     Icons.Rounded.Delete,
-                                    contentDescription = "Delete all"
+                                    contentDescription = stringResource(R.string.song_info_action_delete_all)
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Delete All")
+                                Spacer(Modifier.width(6.dp))
+                                TightWrapText(
+                                    text = stringResource(R.string.song_info_action_delete_all),
+                                    modifier = Modifier.padding(end = 4.dp),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 2,
+                                    lineHeight = 20.sp
+                                )
                             }
                         }
                     }

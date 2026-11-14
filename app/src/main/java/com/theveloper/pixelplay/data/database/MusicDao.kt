@@ -10,9 +10,23 @@ import androidx.room.Update
 import androidx.sqlite.db.SimpleSQLiteQuery
 import com.theveloper.pixelplay.utils.AudioMeta
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 
 private val SONG_SEARCH_QUERY_TOKEN_REGEX = Regex("""[\p{L}\p{N}]+""")
 private const val EMPTY_SONG_SEARCH_MATCH_QUERY = "pixelplayemptyquery*"
+
+private fun buildSongTitleSearchMatchQuery(query: String): String {
+    val tokens = SONG_SEARCH_QUERY_TOKEN_REGEX
+        .findAll(query)
+        .map { it.value.trim() }
+        .filter { it.isNotEmpty() }
+        .take(6)
+        .toList()
+
+    if (tokens.isEmpty()) return EMPTY_SONG_SEARCH_MATCH_QUERY
+
+    return tokens.joinToString(separator = " AND ") { "title:${it}*" }
+}
 
 private fun buildSongSearchMatchQuery(query: String): String {
     val tokens = SONG_SEARCH_QUERY_TOKEN_REGEX
@@ -56,6 +70,53 @@ private const val SONG_DETAIL_PROJECTION = """
     songs.source_type AS source_type
 """
 
+// Projection for list queries: excludes lyrics to prevent CursorWindow overflow (2MB limit)
+// when loading large libraries. Lyrics are only needed for the Now Playing screen (getSongById).
+private const val SONG_LIST_PROJECTION = """
+    id, title, artist_name, artist_id, album_artist, album_name, album_id,
+    content_uri_string, album_art_uri_string, duration, genre, file_path,
+    parent_directory_path, is_favorite, NULL AS lyrics, track_number, disc_number,
+    year, date_added, mime_type, bitrate, sample_rate, telegram_chat_id,
+    telegram_file_id, artists_json, source_type
+"""
+
+data class DeviceCapabilitySongRow(
+    val filePath: String,
+    val contentUriString: String,
+    val mimeType: String?,
+    val duration: Long,
+    val bitrate: Int?,
+    val sampleRate: Int?,
+    val sourceType: Int
+)
+
+/**
+ * Aggregate audio statistics for the diagnostic performance report.
+ * Computed in a single SQL pass so it stays cheap even on large libraries —
+ * we never materialize every row. File-size figures are *estimated* from
+ * bitrate × duration because raw byte sizes are not stored in the DB; this
+ * avoids per-file filesystem stat calls just to build a report.
+ */
+data class LibraryAudioStatsRow(
+    val totalCount: Int,
+    val localCount: Int,
+    val cloudCount: Int,
+    val hiResCount: Int,
+    val ultraHiResCount: Int,
+    val likelyExpensiveCount: Int,
+    val maxBitrate: Int?,
+    val minSampleRate: Int?,
+    val maxSampleRate: Int?,
+    val estMinBytes: Long?,
+    val estAvgBytes: Double?,
+    val estMaxBytes: Long?
+)
+
+data class MimeTypeCountRow(
+    val mimeType: String?,
+    val count: Int
+)
+
 @Dao
 interface MusicDao {
 
@@ -77,6 +138,9 @@ interface MusicDao {
 
     @Update
     suspend fun updateArtists(artists: List<ArtistEntity>)
+
+    @Query("SELECT * FROM artists WHERE id IN (:artistIds)")
+    suspend fun getArtistsByIds(artistIds: List<Long>): List<ArtistEntity>
 
     @Transaction
     suspend fun insertSongs(songs: List<SongEntity>) {
@@ -113,7 +177,19 @@ interface MusicDao {
             if (rowId == -1L) artistsToUpdate.add(artists[index])
         }
         if (artistsToUpdate.isNotEmpty()) {
-            updateArtists(artistsToUpdate)
+            val existingById = getArtistsByIds(artistsToUpdate.map { it.id }).associateBy { it.id }
+            val mergedArtists = artistsToUpdate.map { incoming ->
+                val existing = existingById[incoming.id]
+                if (existing == null) {
+                    incoming
+                } else {
+                    incoming.copy(
+                        imageUrl = incoming.imageUrl ?: existing.imageUrl,
+                        customImageUri = incoming.customImageUri ?: existing.customImageUri
+                    )
+                }
+            }
+            updateArtists(mergedArtists)
         }
     }
 
@@ -200,6 +276,9 @@ interface MusicDao {
     @Query("SELECT id FROM songs WHERE source_type = 5")
     suspend fun getAllNavidromeSongIds(): List<Long>
 
+    @Query("SELECT id FROM songs WHERE source_type = 6")
+    suspend fun getAllJellyfinSongIds(): List<Long>
+
     @Transaction
     suspend fun deleteSongsAndRelatedData(songIds: List<Long>) {
         if (songIds.isEmpty()) return
@@ -239,6 +318,13 @@ interface MusicDao {
         val navidromeSongIds = getAllNavidromeSongIds()
         if (navidromeSongIds.isEmpty()) return
         deleteSongsAndRelatedData(navidromeSongIds)
+    }
+
+    @Transaction
+    suspend fun clearAllJellyfinSongs() {
+        val jellyfinSongIds = getAllJellyfinSongIds()
+        if (jellyfinSongIds.isEmpty()) return
+        deleteSongsAndRelatedData(jellyfinSongIds)
     }
 
     @Transaction
@@ -313,10 +399,19 @@ interface MusicDao {
     @Query("SELECT DISTINCT parent_directory_path FROM songs")
     suspend fun getDistinctParentDirectories(): List<String>
 
+    /**
+     * Reactive variant of [getDistinctParentDirectories]. Re-emits whenever the songs
+     * table changes (e.g. after a sync adds songs in new folders), so cached directory
+     * filters stay consistent with the actual library instead of freezing at an early,
+     * possibly-empty snapshot taken before the first sync completes.
+     */
+    @Query("SELECT DISTINCT parent_directory_path FROM songs")
+    fun getDistinctParentDirectoriesFlow(): Flow<List<String>>
+
     // --- Song Queries ---
     // Updated getSongs to include Telegram songs (negative IDs) regardless of directory filter
-    @Query("""
-        SELECT * FROM songs
+    @Query("SELECT " + SONG_LIST_PROJECTION + """
+        FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
         AND content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
@@ -327,8 +422,17 @@ interface MusicDao {
         applyDirectoryFilter: Boolean
     ): Flow<List<SongEntity>>
 
-    @Query("SELECT * FROM songs WHERE id IN (:songIds)")
+    @Query("SELECT " + SONG_LIST_PROJECTION + " FROM songs WHERE id IN (:songIds)")
     suspend fun getSongsByIdsListSimple(songIds: List<Long>): List<SongEntity>
+
+    /**
+     * Resolves the unified-table song id for a given content URI. Used when the
+     * currently-playing song was loaded from a non-unified source (e.g. raw Telegram
+     * repository Songs whose ids are "chatId_messageId" strings) and we need the
+     * matching negative-Long id to position the song inside the library list.
+     */
+    @Query("SELECT id FROM songs WHERE content_uri_string = :contentUri LIMIT 1")
+    suspend fun getSongIdByContentUri(contentUri: String): Long?
 
     @Query(
         "SELECT " + SONG_DETAIL_PROJECTION + """
@@ -358,9 +462,8 @@ interface MusicDao {
     )
     suspend fun getSongByPath(path: String): SongEntity?
 
-    //@Query("SELECT * FROM songs WHERE id IN (:songIds)")
-    @Query("""
-        SELECT * FROM songs
+    @Query("SELECT " + SONG_LIST_PROJECTION + """
+        FROM songs
         WHERE id IN (:songIds)
         AND (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
     """)
@@ -391,21 +494,96 @@ interface MusicDao {
         applyDirectoryFilter: Boolean
     ): Flow<List<SongEntity>>
 
+    @Query("""
+        SELECT * FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND (title LIKE '%' || :query || '%' OR artist_name LIKE '%' || :query || '%')
+        ORDER BY title ASC
+    """)
+    fun searchSongsLike(
+        query: String,
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean
+    ): Flow<List<SongEntity>>
+
     fun searchSongs(
         query: String,
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean
-    ): Flow<List<SongEntity>> = searchSongsMatch(
-        matchQuery = buildSongSearchMatchQuery(query),
-        allowedParentDirs = allowedParentDirs,
-        applyDirectoryFilter = applyDirectoryFilter
-    )
+    ): Flow<List<SongEntity>> {
+        val ftsFlow = searchSongsMatch(
+            matchQuery = buildSongSearchMatchQuery(query),
+            allowedParentDirs = allowedParentDirs,
+            applyDirectoryFilter = applyDirectoryFilter
+        )
+        val likeFlow = searchSongsLike(
+            query = query.trim(),
+            allowedParentDirs = allowedParentDirs,
+            applyDirectoryFilter = applyDirectoryFilter
+        )
+        return ftsFlow.combine(likeFlow) { ftsResults, likeResults ->
+            val seen = LinkedHashMap<Long, SongEntity>(ftsResults.size + likeResults.size)
+            ftsResults.forEach { seen.putIfAbsent(it.id, it) }
+            likeResults.forEach { seen.putIfAbsent(it.id, it) }
+            seen.values.toList()
+        }
+    }
 
     @Query("SELECT COUNT(*) FROM songs")
     fun getSongCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM songs WHERE source_type != 0")
+    fun getCloudSongCount(): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM songs")
     suspend fun getSongCountOnce(): Int
+
+    @Query("""
+        SELECT
+            file_path AS filePath,
+            content_uri_string AS contentUriString,
+            mime_type AS mimeType,
+            duration,
+            bitrate,
+            sample_rate AS sampleRate,
+            source_type AS sourceType
+        FROM songs
+    """)
+    suspend fun getDeviceCapabilitySongRows(): List<DeviceCapabilitySongRow>
+
+    /**
+     * Single-pass audio aggregates for the diagnostic performance report.
+     * Hi-res thresholds: > 48 kHz = hi-res, >= 176.4 kHz = ultra-hi-res.
+     * Estimated bytes = bitrate(bps) * duration(ms) / 8000.
+     */
+    @Query("""
+        SELECT
+            COUNT(*) AS totalCount,
+            COALESCE(SUM(CASE WHEN source_type = 0 THEN 1 ELSE 0 END), 0) AS localCount,
+            COALESCE(SUM(CASE WHEN source_type != 0 THEN 1 ELSE 0 END), 0) AS cloudCount,
+            COALESCE(SUM(CASE WHEN sample_rate > 48000 THEN 1 ELSE 0 END), 0) AS hiResCount,
+            COALESCE(SUM(CASE WHEN sample_rate >= 176400 THEN 1 ELSE 0 END), 0) AS ultraHiResCount,
+            COALESCE(SUM(CASE
+                WHEN sample_rate > 48000
+                    OR mime_type LIKE '%flac%'
+                    OR mime_type LIKE '%alac%'
+                    OR mime_type LIKE '%wav%'
+                    OR mime_type LIKE '%aiff%'
+                    OR mime_type LIKE '%ape%'
+                THEN 1 ELSE 0 END), 0) AS likelyExpensiveCount,
+            MAX(bitrate) AS maxBitrate,
+            MIN(NULLIF(sample_rate, 0)) AS minSampleRate,
+            MAX(sample_rate) AS maxSampleRate,
+            MIN(CASE WHEN bitrate > 0 AND duration > 0 THEN bitrate * duration / 8000 END) AS estMinBytes,
+            AVG(CASE WHEN bitrate > 0 AND duration > 0 THEN bitrate * duration / 8000 END) AS estAvgBytes,
+            MAX(CASE WHEN bitrate > 0 AND duration > 0 THEN bitrate * duration / 8000 END) AS estMaxBytes
+        FROM songs
+    """)
+    suspend fun getLibraryAudioStats(): LibraryAudioStatsRow
+
+    /** Per-MIME song counts for the diagnostic performance report. */
+    @Query("SELECT mime_type AS mimeType, COUNT(*) AS count FROM songs GROUP BY mime_type ORDER BY count DESC")
+    suspend fun getMimeTypeCounts(): List<MimeTypeCountRow>
 
     /**
      * Returns random songs for efficient shuffle without loading all songs into memory.
@@ -426,6 +604,18 @@ interface MusicDao {
     ): List<SongEntity>
 
     @Query("""
+        SELECT """ + SONG_LIST_PROJECTION + """
+        FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        ORDER BY title COLLATE NOCASE ASC, artist_name COLLATE NOCASE ASC, id ASC
+        LIMIT 1
+    """)
+    suspend fun getFirstPlayableSong(
+        allowedParentDirs: List<String> = emptyList(),
+        applyDirectoryFilter: Boolean = false
+    ): SongEntity?
+
+    @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
         AND content_uri_string NOT LIKE 'gdstudio:%'
@@ -434,6 +624,37 @@ interface MusicDao {
     fun getAllSongs(
         allowedParentDirs: List<String> = emptyList(),
         applyDirectoryFilter: Boolean = false
+    ): Flow<List<SongEntity>>
+
+    @Query("""
+        SELECT """ + SONG_LIST_PROJECTION + """
+        FROM songs
+        WHERE id IN (
+            SELECT MIN(id)
+            FROM songs
+            WHERE album_art_uri_string IS NOT NULL
+            AND album_art_uri_string != ''
+            AND (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+            GROUP BY album_art_uri_string
+        )
+        ORDER BY title COLLATE NOCASE ASC, artist_name COLLATE NOCASE ASC, id ASC
+    """)
+    fun getDistinctAlbumArtSongs(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean
+    ): Flow<List<SongEntity>>
+
+    @Query("""
+        SELECT """ + SONG_LIST_PROJECTION + """
+        FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        ORDER BY date_added DESC, id DESC
+        LIMIT :limit
+    """)
+    fun getHomeMixPreviewSongs(
+        limit: Int,
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean
     ): Flow<List<SongEntity>>
 
     @Query("""
@@ -462,7 +683,7 @@ interface MusicDao {
 
     @Query("""
         SELECT id FROM songs
-        WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
         AND content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (
@@ -478,17 +699,17 @@ interface MusicDao {
         )
         ORDER BY
             CASE WHEN :sortOrder = 'song_default_order' THEN track_number END ASC,
-            CASE WHEN :sortOrder = 'song_title_az' THEN title END ASC,
-            CASE WHEN :sortOrder = 'song_title_za' THEN title END DESC,
-            CASE WHEN :sortOrder = 'song_artist' THEN artist_name END ASC,
-            CASE WHEN :sortOrder = 'song_artist_desc' THEN artist_name END DESC,
-            CASE WHEN :sortOrder = 'song_album' THEN album_name END ASC,
-            CASE WHEN :sortOrder = 'song_album_desc' THEN album_name END DESC,
+            CASE WHEN :sortOrder = 'song_title_az' THEN title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_title_za' THEN title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_artist' THEN artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_artist_desc' THEN artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_album' THEN album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_album_desc' THEN album_name END COLLATE NOCASE DESC,
             CASE WHEN :sortOrder = 'song_date_added' THEN date_added END DESC,
             CASE WHEN :sortOrder = 'song_date_added_asc' THEN date_added END ASC,
             CASE WHEN :sortOrder = 'song_duration' THEN duration END DESC,
             CASE WHEN :sortOrder = 'song_duration_asc' THEN duration END ASC,
-            title ASC,
+            title COLLATE NOCASE ASC,
             id ASC
     """)
     suspend fun getSongIdsSorted(
@@ -501,7 +722,7 @@ interface MusicDao {
     @Query("""
         SELECT songs.id FROM songs
         INNER JOIN favorites ON songs.id = favorites.songId AND favorites.isFavorite = 1
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND (
             :filterMode = 0
             OR (
@@ -514,15 +735,15 @@ interface MusicDao {
             )
         )
         ORDER BY
-            CASE WHEN :sortOrder = 'liked_title_az' THEN songs.title END ASC,
-            CASE WHEN :sortOrder = 'liked_title_za' THEN songs.title END DESC,
-            CASE WHEN :sortOrder = 'liked_artist' THEN songs.artist_name END ASC,
-            CASE WHEN :sortOrder = 'liked_artist_desc' THEN songs.artist_name END DESC,
-            CASE WHEN :sortOrder = 'liked_album' THEN songs.album_name END ASC,
-            CASE WHEN :sortOrder = 'liked_album_desc' THEN songs.album_name END DESC,
+            CASE WHEN :sortOrder = 'liked_title_az' THEN songs.title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_title_za' THEN songs.title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_artist' THEN songs.artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_artist_desc' THEN songs.artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_album' THEN songs.album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_album_desc' THEN songs.album_name END COLLATE NOCASE DESC,
             CASE WHEN :sortOrder = 'liked_date_liked' THEN favorites.timestamp END DESC,
             CASE WHEN :sortOrder = 'liked_date_liked_asc' THEN favorites.timestamp END ASC,
-            songs.title ASC,
+            songs.title COLLATE NOCASE ASC,
             songs.id ASC
     """)
     suspend fun getFavoriteSongIdsSorted(
@@ -539,7 +760,7 @@ interface MusicDao {
      */
     @Query("""
         SELECT * FROM songs
-        WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
         AND content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND (
@@ -555,19 +776,19 @@ interface MusicDao {
         )
         ORDER BY
             CASE WHEN :sortOrder = 'song_default_order' THEN track_number END ASC,
-            CASE WHEN :sortOrder = 'song_title_az' THEN title END ASC,
-            CASE WHEN :sortOrder = 'song_title_za' THEN title END DESC,
-            CASE WHEN :sortOrder = 'song_artist' THEN artist_name END ASC,
-            CASE WHEN :sortOrder = 'song_artist_desc' THEN artist_name END DESC,
-            CASE WHEN :sortOrder = 'song_album' THEN album_name END ASC,
-            CASE WHEN :sortOrder = 'song_album_desc' THEN album_name END DESC,
+            CASE WHEN :sortOrder = 'song_title_az' THEN title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_title_za' THEN title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_artist' THEN artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_artist_desc' THEN artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_album' THEN album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_album_desc' THEN album_name END COLLATE NOCASE DESC,
             CASE WHEN :sortOrder = 'song_date_added' THEN date_added END DESC,
             CASE WHEN :sortOrder = 'song_date_added_asc' THEN date_added END ASC,
             CASE WHEN :sortOrder = 'song_duration' THEN duration END DESC,
             CASE WHEN :sortOrder = 'song_duration_asc' THEN duration END ASC,
 
-            -- Secondary sort falls back to title for consistency
-            title ASC,
+            -- Secondary sort falls back to title for consistency (case-insensitive)
+            title COLLATE NOCASE ASC,
             id ASC
     """)
     fun getSongsPaginated(
@@ -577,6 +798,46 @@ interface MusicDao {
         filterMode: Int
     ): PagingSource<Int, SongEntity>
 
+    @Query("""
+        SELECT """ + SONG_LIST_PROJECTION + """
+        FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND source_type != 0
+            )
+        )
+        ORDER BY
+            CASE WHEN :sortOrder = 'song_default_order' THEN track_number END ASC,
+            CASE WHEN :sortOrder = 'song_title_az' THEN title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_title_za' THEN title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_artist' THEN artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_artist_desc' THEN artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_album' THEN album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'song_album_desc' THEN album_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'song_date_added' THEN date_added END DESC,
+            CASE WHEN :sortOrder = 'song_date_added_asc' THEN date_added END ASC,
+            CASE WHEN :sortOrder = 'song_duration' THEN duration END DESC,
+            CASE WHEN :sortOrder = 'song_duration_asc' THEN duration END ASC,
+            title COLLATE NOCASE ASC,
+            id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getSongsPage(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        sortOrder: String,
+        filterMode: Int,
+        limit: Int,
+        offset: Int
+    ): List<SongEntity>
+
     // --- Paginated Favorites Queries ---
     /**
      * Returns a PagingSource for favorite songs, enabling efficient pagination.
@@ -585,7 +846,7 @@ interface MusicDao {
     @Query("""
         SELECT songs.* FROM songs
         INNER JOIN favorites ON songs.id = favorites.songId AND favorites.isFavorite = 1
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND (
             :filterMode = 0
             OR (
@@ -598,15 +859,15 @@ interface MusicDao {
             )
         )
         ORDER BY
-            CASE WHEN :sortOrder = 'liked_title_az' THEN songs.title END ASC,
-            CASE WHEN :sortOrder = 'liked_title_za' THEN songs.title END DESC,
-            CASE WHEN :sortOrder = 'liked_artist' THEN songs.artist_name END ASC,
-            CASE WHEN :sortOrder = 'liked_artist_desc' THEN songs.artist_name END DESC,
-            CASE WHEN :sortOrder = 'liked_album' THEN songs.album_name END ASC,
-            CASE WHEN :sortOrder = 'liked_album_desc' THEN songs.album_name END DESC,
+            CASE WHEN :sortOrder = 'liked_title_az' THEN songs.title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_title_za' THEN songs.title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_artist' THEN songs.artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_artist_desc' THEN songs.artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_album' THEN songs.album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_album_desc' THEN songs.album_name END COLLATE NOCASE DESC,
             CASE WHEN :sortOrder = 'liked_date_liked' THEN favorites.timestamp END DESC,
             CASE WHEN :sortOrder = 'liked_date_liked_asc' THEN favorites.timestamp END ASC,
-            songs.title ASC,
+            songs.title COLLATE NOCASE ASC,
             songs.id ASC
     """)
     fun getFavoriteSongsPaginated(
@@ -622,7 +883,7 @@ interface MusicDao {
     @Query("""
         SELECT songs.* FROM songs
         INNER JOIN favorites ON songs.id = favorites.songId AND favorites.isFavorite = 1
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND (
             :filterMode = 0
             OR (
@@ -634,12 +895,50 @@ interface MusicDao {
                 AND songs.source_type != 0
             )
         )
-        ORDER BY songs.title ASC
+        ORDER BY songs.title COLLATE NOCASE ASC
     """)
     suspend fun getFavoriteSongsList(
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean,
         filterMode: Int
+    ): List<SongEntity>
+
+    @Query("""
+        SELECT """ + SONG_LIST_PROJECTION + """
+        FROM songs
+        INNER JOIN favorites ON songs.id = favorites.songId AND favorites.isFavorite = 1
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND songs.source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND songs.source_type != 0
+            )
+        )
+        ORDER BY
+            CASE WHEN :sortOrder = 'liked_title_az' THEN songs.title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_title_za' THEN songs.title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_artist' THEN songs.artist_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_artist_desc' THEN songs.artist_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_album' THEN songs.album_name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'liked_album_desc' THEN songs.album_name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'liked_date_liked' THEN favorites.timestamp END DESC,
+            CASE WHEN :sortOrder = 'liked_date_liked_asc' THEN favorites.timestamp END ASC,
+            songs.title COLLATE NOCASE ASC,
+            songs.id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getFavoriteSongsPage(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        sortOrder: String,
+        filterMode: Int,
+        limit: Int,
+        offset: Int
     ): List<SongEntity>
 
     /**
@@ -648,7 +947,7 @@ interface MusicDao {
     @Query("""
         SELECT COUNT(*) FROM songs
         INNER JOIN favorites ON songs.id = favorites.songId AND favorites.isFavorite = 1
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND (
             :filterMode = 0
             OR (
@@ -674,7 +973,7 @@ interface MusicDao {
     @Query("""
         SELECT songs.* FROM songs
         INNER JOIN songs_fts ON songs_fts.rowid = songs.id
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND songs_fts MATCH :matchQuery
@@ -697,12 +996,12 @@ interface MusicDao {
     )
 
     /**
-     * Search songs with a result limit for non-paginated contexts.
+     * Search songs with a result limit for non-paginated contexts (FTS).
      */
     @Query("""
         SELECT songs.* FROM songs
         INNER JOIN songs_fts ON songs_fts.rowid = songs.id
-        WHERE (:applyDirectoryFilter = 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
         AND songs_fts MATCH :matchQuery
@@ -716,17 +1015,75 @@ interface MusicDao {
         limit: Int
     ): Flow<List<SongEntity>>
 
-    fun searchSongsLimited(
+    /**
+     * LIKE-based search focusing only on titles.
+     */
+    @Query("""
+        SELECT * FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND title LIKE '%' || :query || '%'
+        ORDER BY title ASC
+        LIMIT :limit
+    """)
+    fun searchSongsLimitedByTitleLike(
         query: String,
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean,
         limit: Int
-    ): Flow<List<SongEntity>> = searchSongsLimitedMatch(
-        matchQuery = buildSongSearchMatchQuery(query),
-        allowedParentDirs = allowedParentDirs,
-        applyDirectoryFilter = applyDirectoryFilter,
-        limit = limit
-    )
+    ): Flow<List<SongEntity>>
+
+    /**
+     * LIKE-based fallback search for songs that FTS tokenization may miss.
+     */
+    @Query("""
+        SELECT * FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND (title LIKE '%' || :query || '%' OR artist_name LIKE '%' || :query || '%')
+        ORDER BY title ASC
+        LIMIT :limit
+    """)
+    fun searchSongsLimitedLike(
+        query: String,
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        limit: Int
+    ): Flow<List<SongEntity>>
+
+    fun searchSongsLimited(
+        query: String,
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        limit: Int,
+        titleOnly: Boolean = false
+    ): Flow<List<SongEntity>> {
+        val ftsFlow = searchSongsLimitedMatch(
+            matchQuery = if (titleOnly) buildSongTitleSearchMatchQuery(query) else buildSongSearchMatchQuery(query),
+            allowedParentDirs = allowedParentDirs,
+            applyDirectoryFilter = applyDirectoryFilter,
+            limit = limit
+        )
+        val likeFlow = if (titleOnly) {
+            searchSongsLimitedByTitleLike(
+                query = query.trim(),
+                allowedParentDirs = allowedParentDirs,
+                applyDirectoryFilter = applyDirectoryFilter,
+                limit = limit
+            )
+        } else {
+            searchSongsLimitedLike(
+                query = query.trim(),
+                allowedParentDirs = allowedParentDirs,
+                applyDirectoryFilter = applyDirectoryFilter,
+                limit = limit
+            )
+        }
+        return ftsFlow.combine(likeFlow) { ftsResults, likeResults ->
+            val seen = LinkedHashMap<Long, SongEntity>(ftsResults.size + likeResults.size)
+            ftsResults.forEach { seen.putIfAbsent(it.id, it) }
+            likeResults.forEach { seen.putIfAbsent(it.id, it) }
+            seen.values.toList().take(limit)
+        }
+    }
 
     // --- Paginated Genre Query ---
     /**
@@ -734,7 +1091,7 @@ interface MusicDao {
      */
     @Query("""
         SELECT * FROM songs
-        WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
         AND content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND genre LIKE :genreName
@@ -753,12 +1110,13 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             COUNT(songs.id) AS song_count,
             albums.date_added AS date_added,
             albums.year AS year
-        FROM albums
-        INNER JOIN songs ON albums.id = songs.album_id
+        FROM songs
+        INNER JOIN albums ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
@@ -778,15 +1136,18 @@ interface MusicDao {
             albums.title,
             albums.artist_name,
             albums.artist_id,
+            albums.album_artist,
             albums.album_art_uri_string,
             albums.date_added,
             albums.year
+        HAVING COUNT(songs.id) >= :minTracks
         ORDER BY albums.title ASC
     """)
     fun getAlbums(
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean,
-        filterMode: Int
+        filterMode: Int,
+        minTracks: Int
     ): Flow<List<AlbumEntity>>
 
     @Query("""
@@ -795,6 +1156,124 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
+            albums.album_art_uri_string AS album_art_uri_string,
+            COUNT(songs.id) AS song_count,
+            albums.date_added AS date_added,
+            albums.year AS year
+        FROM songs
+        INNER JOIN albums ON albums.id = songs.album_id
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND songs.source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND songs.source_type != 0
+            )
+        )
+        GROUP BY
+            albums.id,
+            albums.title,
+            albums.artist_name,
+            albums.artist_id,
+            albums.album_artist,
+            albums.album_art_uri_string,
+            albums.date_added,
+            albums.year
+        HAVING COUNT(songs.id) >= :minTracks
+        ORDER BY
+            CASE WHEN :sortOrder = 'album_title_az' THEN albums.title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'album_title_za' THEN albums.title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'album_artist' THEN COALESCE(NULLIF(TRIM(albums.album_artist), ''), albums.artist_name) END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'album_artist_desc' THEN COALESCE(NULLIF(TRIM(albums.album_artist), ''), albums.artist_name) END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'album_release_year' THEN albums.year END DESC,
+            CASE WHEN :sortOrder = 'album_release_year_asc' THEN albums.year END ASC,
+            CASE WHEN :sortOrder = 'album_date_added' THEN albums.date_added END DESC,
+            CASE WHEN :sortOrder = 'album_size_asc' THEN song_count END ASC,
+            CASE WHEN :sortOrder = 'album_size_desc' THEN song_count END DESC,
+            albums.title COLLATE NOCASE ASC,
+            albums.artist_name COLLATE NOCASE ASC,
+            albums.id ASC
+    """)
+    fun getAlbumsPaginated(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        filterMode: Int,
+        sortOrder: String,
+        minTracks: Int
+    ): PagingSource<Int, AlbumEntity>
+
+    @Query("""
+        SELECT
+            albums.id AS id,
+            albums.title AS title,
+            albums.artist_name AS artist_name,
+            albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
+            albums.album_art_uri_string AS album_art_uri_string,
+            COUNT(songs.id) AS song_count,
+            albums.date_added AS date_added,
+            albums.year AS year
+        FROM songs
+        INNER JOIN albums ON albums.id = songs.album_id
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND songs.source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND songs.source_type != 0
+            )
+        )
+        GROUP BY
+            albums.id,
+            albums.title,
+            albums.artist_name,
+            albums.artist_id,
+            albums.album_artist,
+            albums.album_art_uri_string,
+            albums.date_added,
+            albums.year
+        HAVING COUNT(songs.id) >= :minTracks
+        ORDER BY
+            CASE WHEN :sortOrder = 'album_title_az' THEN albums.title END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'album_title_za' THEN albums.title END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'album_artist' THEN COALESCE(NULLIF(TRIM(albums.album_artist), ''), albums.artist_name) END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'album_artist_desc' THEN COALESCE(NULLIF(TRIM(albums.album_artist), ''), albums.artist_name) END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'album_release_year' THEN albums.year END DESC,
+            CASE WHEN :sortOrder = 'album_release_year_asc' THEN albums.year END ASC,
+            CASE WHEN :sortOrder = 'album_date_added' THEN albums.date_added END DESC,
+            CASE WHEN :sortOrder = 'album_size_asc' THEN song_count END ASC,
+            CASE WHEN :sortOrder = 'album_size_desc' THEN song_count END DESC,
+            albums.title COLLATE NOCASE ASC,
+            albums.artist_name COLLATE NOCASE ASC,
+            albums.id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getAlbumsPage(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        filterMode: Int,
+        sortOrder: String,
+        minTracks: Int,
+        limit: Int,
+        offset: Int
+    ): List<AlbumEntity>
+
+    @Query("""
+        SELECT
+            albums.id AS id,
+            albums.title AS title,
+            albums.artist_name AS artist_name,
+            albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             (
                 SELECT COUNT(*)
@@ -815,6 +1294,7 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             (
                 SELECT COUNT(*)
@@ -825,9 +1305,10 @@ interface MusicDao {
             albums.year AS year
         FROM albums
         WHERE albums.title LIKE '%' || :query || '%'
+        AND song_count >= :minTracks
         ORDER BY albums.title ASC
     """)
-    fun searchAlbums(query: String): Flow<List<AlbumEntity>>
+    fun searchAlbums(query: String, minTracks: Int = 1): Flow<List<AlbumEntity>>
 
     @Query("SELECT COUNT(*) FROM albums")
     fun getAlbumCount(): Flow<Int>
@@ -839,12 +1320,13 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             COUNT(songs.id) AS song_count,
             albums.date_added AS date_added,
             albums.year AS year
-        FROM albums
-        INNER JOIN songs ON albums.id = songs.album_id
+        FROM songs
+        INNER JOIN albums ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
@@ -853,14 +1335,17 @@ interface MusicDao {
             albums.title,
             albums.artist_name,
             albums.artist_id,
+            albums.album_artist,
             albums.album_art_uri_string,
             albums.date_added,
             albums.year
+        HAVING COUNT(songs.id) >= :minTracks
         ORDER BY albums.title ASC
     """)
     suspend fun getAllAlbumsList(
         allowedParentDirs: List<String>,
-        applyDirectoryFilter: Boolean
+        applyDirectoryFilter: Boolean,
+        minTracks: Int
     ): List<AlbumEntity>
 
     @Query("""
@@ -869,6 +1354,7 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             COUNT(songs.id) AS song_count,
             albums.date_added AS date_added,
@@ -881,6 +1367,7 @@ interface MusicDao {
             albums.title,
             albums.artist_name,
             albums.artist_id,
+            albums.album_artist,
             albums.album_art_uri_string,
             albums.date_added,
             albums.year
@@ -894,12 +1381,13 @@ interface MusicDao {
             albums.title AS title,
             albums.artist_name AS artist_name,
             albums.artist_id AS artist_id,
+            albums.album_artist AS album_artist,
             albums.album_art_uri_string AS album_art_uri_string,
             COUNT(songs.id) AS song_count,
             albums.date_added AS date_added,
             albums.year AS year
-        FROM albums
-        INNER JOIN songs ON albums.id = songs.album_id
+        FROM songs
+        INNER JOIN albums ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
@@ -909,15 +1397,18 @@ interface MusicDao {
             albums.title,
             albums.artist_name,
             albums.artist_id,
+            albums.album_artist,
             albums.album_art_uri_string,
             albums.date_added,
             albums.year
+        HAVING COUNT(songs.id) >= :minTracks
         ORDER BY albums.title ASC
     """)
     fun searchAlbums(
         query: String,
         allowedParentDirs: List<String>,
-        applyDirectoryFilter: Boolean
+        applyDirectoryFilter: Boolean,
+        minTracks: Int
     ): Flow<List<AlbumEntity>>
 
     // --- Artist Queries ---
@@ -933,6 +1424,77 @@ interface MusicDao {
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean
     ): Flow<List<ArtistEntity>>
+
+    @Query("""
+        SELECT artists.id, artists.name, artists.image_url, artists.custom_image_uri,
+               COUNT(DISTINCT songs.id) AS track_count
+        FROM songs
+        INNER JOIN song_artist_cross_ref ON song_artist_cross_ref.song_id = songs.id
+        INNER JOIN artists ON artists.id = song_artist_cross_ref.artist_id
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND songs.source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND songs.source_type != 0
+            )
+        )
+        GROUP BY artists.id
+        ORDER BY
+            CASE WHEN :sortOrder = 'artist_name_az' THEN artists.name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'artist_name_za' THEN artists.name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'artist_num_songs_desc' THEN track_count END DESC,
+            CASE WHEN :sortOrder = 'artist_num_songs_asc' THEN track_count END ASC,
+            artists.name COLLATE NOCASE ASC,
+            artists.id ASC
+    """)
+    fun getArtistsPaginated(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        filterMode: Int,
+        sortOrder: String
+    ): PagingSource<Int, ArtistEntity>
+
+    @Query("""
+        SELECT artists.id, artists.name, artists.image_url, artists.custom_image_uri,
+               COUNT(DISTINCT songs.id) AS track_count
+        FROM songs
+        INNER JOIN song_artist_cross_ref ON song_artist_cross_ref.song_id = songs.id
+        INNER JOIN artists ON artists.id = song_artist_cross_ref.artist_id
+        WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (
+            :filterMode = 0
+            OR (
+                :filterMode = 1
+                AND songs.source_type = 0
+            )
+            OR (
+                :filterMode = 2
+                AND songs.source_type != 0
+            )
+        )
+        GROUP BY artists.id
+        ORDER BY
+            CASE WHEN :sortOrder = 'artist_name_az' THEN artists.name END COLLATE NOCASE ASC,
+            CASE WHEN :sortOrder = 'artist_name_za' THEN artists.name END COLLATE NOCASE DESC,
+            CASE WHEN :sortOrder = 'artist_num_songs_desc' THEN track_count END DESC,
+            CASE WHEN :sortOrder = 'artist_num_songs_asc' THEN track_count END ASC,
+            artists.name COLLATE NOCASE ASC,
+            artists.id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getArtistsPage(
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean,
+        filterMode: Int,
+        sortOrder: String,
+        limit: Int,
+        offset: Int
+    ): List<ArtistEntity>
 
     /**
      * Unfiltered list of all artists (including those only reachable via cross-refs).
@@ -972,9 +1534,9 @@ interface MusicDao {
     @Query("""
         SELECT artists.id, artists.name, artists.image_url, artists.custom_image_uri,
                COUNT(DISTINCT songs.id) AS track_count
-        FROM artists
-        INNER JOIN song_artist_cross_ref ON artists.id = song_artist_cross_ref.artist_id
-        INNER JOIN songs ON song_artist_cross_ref.song_id = songs.id
+        FROM songs
+        INNER JOIN song_artist_cross_ref ON song_artist_cross_ref.song_id = songs.id
+        INNER JOIN artists ON artists.id = song_artist_cross_ref.artist_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'
@@ -1030,6 +1592,35 @@ interface MusicDao {
         applyDirectoryFilter: Boolean
     ): Flow<List<SongEntity>>
 
+    // Multi-genre aware query: matches songs where the genre column equals the name (case-
+    // insensitively, via LIKE), or contains it as part of a comma-separated list.
+    // SQLite LIKE is case-insensitive for ASCII letters by default, which is sufficient
+    // for genre names. All six arms use LIKE so that "rock" matches "Rock", "Rock,Pop",
+    // "Rock, Pop", "Pop,Rock", "Pop, Rock", and "Pop,Rock,Jazz".
+    @Query("""
+        SELECT * FROM songs
+        WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND (
+            genre LIKE :genreName
+            OR genre LIKE :genrePrefix
+            OR genre LIKE :genreSuffixWithSpace
+            OR genre LIKE :genreSuffix
+            OR genre LIKE :genreMiddleWithSpace
+            OR genre LIKE :genreMiddle
+        )
+        ORDER BY title ASC
+    """)
+    fun getSongsByGenreContaining(
+        genreName: String,
+        genrePrefix: String,
+        genreSuffixWithSpace: String,
+        genreSuffix: String,
+        genreMiddleWithSpace: String,
+        genreMiddle: String,
+        allowedParentDirs: List<String>,
+        applyDirectoryFilter: Boolean
+    ): Flow<List<SongEntity>>
+
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR id < 0 OR parent_directory_path IN (:allowedParentDirs))
@@ -1077,10 +1668,10 @@ interface MusicDao {
     @Query("SELECT DISTINCT album_art_uri_string FROM songs WHERE album_art_uri_string IS NOT NULL")
     fun getAllUniqueAlbumArtUrisFromSongs(): Flow<List<String>>
 
-    @Query("DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM songs)")
+    @Query("DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM songs WHERE songs.album_id = albums.id)")
     suspend fun deleteOrphanedAlbums()
 
-    @Query("DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM song_artist_cross_ref)")
+    @Query("DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM song_artist_cross_ref WHERE song_artist_cross_ref.artist_id = artists.id)")
     suspend fun deleteOrphanedArtists()
 
     // --- Favorite Operations ---
@@ -1175,7 +1766,7 @@ interface MusicDao {
     @Query("UPDATE songs SET lyrics = NULL")
     suspend fun resetAllLyrics()
 
-    @Query("SELECT * FROM songs WHERE content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD'")
+    @Query("SELECT " + SONG_LIST_PROJECTION + " FROM songs WHERE content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD'")
     suspend fun getAllSongsList(): List<SongEntity>
 
     @Query("SELECT id, title, artist_name, album_name, duration FROM songs WHERE source_type = 0 AND content_uri_string NOT LIKE 'gdstudio:%' AND IFNULL(parent_directory_path, '') != '/Cloud/GD'")
@@ -1306,9 +1897,9 @@ interface MusicDao {
     @Query("""
         SELECT artists.id, artists.name, artists.image_url, artists.custom_image_uri,
                COUNT(DISTINCT songs.id) AS track_count
-        FROM artists
-        INNER JOIN song_artist_cross_ref ON artists.id = song_artist_cross_ref.artist_id
-        INNER JOIN songs ON song_artist_cross_ref.song_id = songs.id
+        FROM songs
+        INNER JOIN song_artist_cross_ref ON song_artist_cross_ref.song_id = songs.id
+        INNER JOIN artists ON artists.id = song_artist_cross_ref.artist_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
         AND songs.content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(songs.parent_directory_path, '') != '/Cloud/GD'

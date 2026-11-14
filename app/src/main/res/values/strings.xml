@@ -1,122 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PixelPlayer</string>
+    <string name="app_tagline">Music Player</string>
     <string name="app_name_change_title">App Name Change</string>
     <string name="app_name_change_message">We have changed our app\'s name from PixelPlay to PixelPlayer due to a trademark-related issue. Keep playing!</string>
-    <string name="do_not_show_again">Do not show again</string>
-    <string name="dismiss">Dismiss</string>
-    <string name="lyrics">Lyrics</string>
-    <string name="close_lyrics_sheet">Close Lyrics Sheet</string>
-    <string name="loading_lyrics">Loading lyrics…</string>
-    <string name="cant_find_lyrics">Couldn\'t find lyrics for this song.</string>
-    <string name="lyrics_provided_by">Lyrics provided by</string>
-    <string name="lrclib_uri">https://lrclib.net/</string>
-    <string name="all_files_access_title">Permiso Especial Requerido</string>
-    <string name="all_files_access_description">Para poder editar los metadatos de tus canciones (archivos .mp3), PixelPlayer necesita un permiso especial de acceso a todos los archivos. Esto nos permitirá modificar las etiquetas de tus pistas directamente. Por favor, concede este permiso en la siguiente pantalla para habilitar la edición de metadatos.</string>
-    <string name="grant_permission_button">Conceder Permiso</string>
-    <string name="all_files_access_setting">All Files Access</string>
-    <string name="lyrics_not_found">Lyrics not found</string>
-    <string name="search_lyrics_online_prompt">Would you like to search for lyrics online?</string>
-    <string name="custom_search_hint">We couldn’t find lyrics automatically. You can edit the title or artist and try searching manually.</string>
-    <string name="failed_to_search_for_lyrics">Failed to search for lyrics</string>
-    <string name="failed_to_fetch_lyrics_from_remote">Failed to fetch lyrics from remote</string>
-    <string name="lyrics_fetch_timeout">Connection timed out. Please check your internet connection.</string>
-    <string name="lyrics_network_error">Network error. Please check your internet connection.</string>
-    <string name="lyrics_server_error">Server error (code %d). Please try again later.</string>
-    <string name="found_n_matches_format">Found %d match(es)</string>
-    <string name="searched_for_x_format">Searched for \"%s\"</string>
-    <string name="search">Search</string>
-    <string name="searching_lyrics">Searching for lyrics…</string>
-    <string name="lyrics_embedded_already_available">Embedded lyrics already found. Online fetch skipped.</string>
-    <string name="local_lrc_already_available">Local (.lrc) lyrics already found. Online fetch skipped.</string>
-    <string name="fetch_lyrics_show_options_title">Show lyric options</string>
-    <string name="fetch_lyrics_show_options_subtitle">Always open the picker instead of auto-applying the first match</string>
-    <string name="error">Error</string>
-    <string name="ok">OK</string>
-    <string name="cancel">Cancel</string>
-    <string name="import_file">Import</string>
+    <string name="app_name_change_do_not_show_again">Do not show again</string>
 
-    <!-- Sync/Progress strings -->
-    <string name="sync_scanning">Scanning music files…</string>
-    <string name="sync_processing">Processing files…</string>
-    <string name="sync_files_progress">%1$d of %2$d files</string>
-    <string name="sync_in_progress">Syncing library…</string>
-    <string name="sync_complete">Sync complete</string>
-    <string name="sync_pending">Waiting…</string>
-    <string name="syncing_library">Sincronizando biblioteca…</string>
-    <string name="unknown_song_title">Unknown track</string>
-    <string name="unknown_artist">Unknown artist</string>
-    <string name="unknown_album">Unknown album</string>
-    <string name="artist_picker_title">Pick an Artist</string>
-    <string name="artist_picker_supporting_text">Open any credited artist for this track.</string>
-    <string name="artist_picker_count_single">1 artist</string>
-    <string name="artist_picker_count_multiple">%1$d artists</string>
-    <string name="artist_picker_primary_label">Primary artist</string>
-    <string name="artist_picker_shortcut_label">Artist page</string>
+    <!-- Navigation Bar Labels -->
+    <string name="nav_bar_home">Home</string>
+    <string name="nav_bar_search">Search</string>
+    <string name="nav_bar_library">Library</string>
+
+    <!-- All files access dialog-->
+    <string name="all_files_access_title">Special Permission Required</string>
+    <string name="all_files_access_description">To edit song metadata (.mp3 files), PixelPlayer needs special access to all files. This allows us to modify track tags directly. Please grant this permission on the next screen to enable metadata editing.</string>
+    <string name="grant_permission_button">Grant Permission</string>
+
+    <!-- External Player -->
     <string name="external_queue_label">Quick play</string>
     <string name="external_playback_error">Unable to open that audio file.</string>
-    <string name="open_full_player">Open full player</string>
-    <string name="close_external_player">Close floating player</string>
-    <string name="close_notification_player">Close player</string>
-    <string name="previous_track">Previous track</string>
-    <string name="next_track">Next track</string>
-    <string name="pause_playback">Pause playback</string>
-    <string name="play_playback">Play</string>
-    <string name="playlist_not_found">Playlist not found.</string>
-    <string name="save_lyrics_as_lrc">Save lyrics as .lrc</string>
-    <string name="save_lyrics_dialog_title">Save Lyrics</string>
-    <string name="save_lyrics_dialog_message">Choose which version to save:</string>
-    <string name="save_synced_lyrics">Synced (with timestamps)</string>
-    <string name="save_plain_lyrics">Plain (text only)</string>
-    <string name="lyrics_saved_successfully">Lyrics saved successfully</string>
-    <string name="lyrics_save_failed">Failed to save lyrics</string>
-    <string name="no_lyrics_to_save">No lyrics available to save</string>
-    <string name="reset_imported_lyrics">Reset imported lyrics</string>
-    <string name="lyrics_sync_offset">Lyrics sync offset</string>
-    <string name="lyrics_sync_offset_format">%+.1fs</string>
-    <string name="lyrics_sync_offset_reset">Reset</string>
-    <string name="lyrics_earlier">Earlier</string>
-    <string name="lyrics_later">Later</string>
+    <string name="external_action_open_full_player">Open full player</string>
 
-    <!-- AI Playlist -->
-    <string name="ai_error_api_key">Please configure your Gemini API Key in Settings.</string>
-    <string name="ai_error_generic">AI Error: %s</string>
-    <string name="ai_no_songs_found">AI couldn\'t find any songs for your prompt.</string>
-    <string name="ai_prompt_empty">Write an idea for your Daily Mix</string>
-    <string name="ai_daily_mix_updated">Daily Mix updated with AI</string>
-    <string name="ai_no_songs_for_mix">AI couldn\'t find songs for this mix</string>
-
-    <!-- Launcher Shortcuts -->
+    <!-- App Shortcuts -->
     <string name="shortcut_shuffle_short">Shuffle</string>
     <string name="shortcut_shuffle_long">Shuffle all songs</string>
-    <string name="shortcut_playlist_short">Playlist</string>
-    <string name="shortcut_playlist_long">Last played playlist</string>
-
-    <!-- Quick Settings Tiles -->
     <string name="tile_shuffle_all">Shuffle All</string>
     <string name="tile_last_playlist">Last Playlist</string>
     <string name="tile_last_playlist_unavailable">No playlist available to open</string>
 
-    <!-- Errors -->
-    <string name="invalid_album_id">Invalid album ID</string>
-    <string name="album_id_not_found">Album ID not found</string>
-    <string name="error_loading_album">Error loading album data: %s</string>
-    <string name="album_not_found">Album not found</string>
-    <string name="could_not_update">Could not update: %s</string>
-    <string name="invalid_artist_id">Invalid artist ID</string>
-    <string name="artist_id_not_found">Artist ID not found</string>
-    <string name="error_loading_artist">Error loading artist data: %s</string>
-    <string name="could_not_find_artist">Could not find the artist</string>
-    <string name="no_valid_songs">No valid songs found to play</string>
+    <!-- Playstore Announcement -->
+    <string name="playstore_dialog_action_open">Open Play Store</string>
+    <string name="playstore_dialog_action_continue_beta">Continue beta</string>
+    <string name="playstore_dialog_link_pending">The Play Store link will be enabled from GitHub config.</string>
+    <string name="playstore_dialog_title">PixelPlayer is now available on Google Play</string>
+    <string name="playstore_dialog_body">Use the stable channel on Google Play for release updates while we keep beta builds active.</string>
+    <string name="playstore_dialog_app_name">PixelPlayer</string>
+    <string name="playstore_dialog_release_announcement">Release announcement</string>
+    <string name="playstore_dialog_coming_soon">Coming soon</string>
 
-    <!-- Widgets -->
-    <string name="glance_widget_description">Responsive widget that adapts to its size</string>
-    <string name="widget_bar_4x1_desc">Compact player bar</string>
-    <string name="widget_control_4x2_desc">Full controls with shuffle and repeat</string>
-    <string name="widget_grid_2x2_desc">Minimalist square player</string>
+    <!-- Brick breaker -->
+    <string name="easter_egg_thank_you">Thank you for using PixelPlayer!</string>
+    <string name="brick_high">HIGH %1$d</string>
+    <string name="brick_cd_close">Close</string>
+    <string name="brick_stat_score">SCORE</string>
+    <string name="brick_stat_lvl">LVL %1$d</string>
+    <string name="brick_stat_lives">LIVES</string>
+    <string name="brick_level_complete">LEVEL COMPLETE!</string>
+    <string name="brick_game_over">GAME OVER</string>
+    <string name="brick_score_line">Score: %1$d</string>
+    <string name="brick_try_again">Try Again?</string>
+    <string name="brick_next_level">Next Level</string>
+    <string name="brick_restart">Restart Game</string>
+    <string name="brick_tap_relaunch">TAP TO RELAUNCH</string>
+    <string name="brick_play_random">Play Random Music</string>
+    <string name="brick_title">Brick Breaker</string>
+    <string name="brick_high_score">HIGH SCORE  %1$d</string>
+    <string name="brick_play">Play</string>
+    <string name="brick_drag_paddle">Drag to move the paddle</string>
+
+    <!-- Music Service -->
+    <string name="close_notification_player">Close player</string>
     <string name="service_processing_action">Processing playback action…</string>
-    <!-- Language -->
-    <string name="settings_language">Language</string>
-    <string name="settings_language_summary">Change app language</string>
-    <string name="language_english">English</string>
-    <string name="language_chinese">简体中文 (Simplified Chinese)</string>
+    <string name="player_playback_error">Playback error: %1$s</string>
+
+    <!-- Common Text & Labels -->
+    <string name="common_back">Back</string>
+    <string name="common_ok">OK</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_dismiss">Dismiss</string>
+    <string name="common_error">Error</string>
+    <string name="common_search">Search</string>
+    <string name="common_clear_search">Clear search</string>
+    <string name="common_all">All</string>
+    <string name="common_confirm">Confirm</string>
+    <string name="common_saved">Saved!</string>
+    <string name="common_selected">Selected</string>
+    <string name="common_percentage_text">%1$d%%</string>
+    <string name="common_artist">Artist</string>
+    <string name="common_select_all">Select All</string>
+    <string name="common_clear">Clear</string>
+    <string name="common_error_unknown">Unknown error</string>
+
+    <!-- Common Actions & Labels -->
+    <string name="common_save">Save</string>
+    <string name="common_done">Done</string>
+    <string name="common_reset">Reset</string>
+    <string name="common_apply">Apply</string>
+    <string name="common_shuffle">Shuffle</string>
+    <string name="common_copy">Copy</string>
+    <string name="common_share">Share</string>
+    <string name="common_undo">Undo</string>
+    <string name="common_import">Import</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_export">Export</string>
+    <string name="common_merge">Merge</string>
+    <string name="common_rename">Rename</string>
+    <string name="common_create">Create</string>
+    <string name="common_lyrics">Lyrics</string>
+    <string name="common_settings">Settings</string>
+    <string name="common_album_art">Album Art</string>
+    <string name="common_playlist">Playlist</string>
+    <string name="common_unknown_track">Unknown track</string>
+    <string name="common_unknown_artist">Unknown artist</string>
+    <string name="common_unknown_album">Unknown album</string>
+    <string name="common_close">Close</string>
+    <string name="common_add">Add</string>
+    <string name="common_remove">Remove</string>
+    <string name="common_play">Play</string>
+    <string name="common_previous_track">Previous track</string>
+    <string name="common_next_track">Next track</string>
+    <string name="common_favorite">Favorite</string>
+    <string name="common_pause">Pause</string>
+    <string name="common_repeat">Repeat</string>
+    <string name="common_options">Options</string>
+    <string name="common_shuffle_play">Shuffle Play</string>
+    <string name="common_more_options_for">More options for %1$s</string>
+    <string name="common_expand_menu">Expand menu</string>
+    <string name="common_next">Next</string>
+    <string name="common_finish">Finish</string>
+    <string name="common_reset_defaults">Reset defaults</string>
+    <string name="common_export_all">Export all</string>
+    <string name="common_merge_all">Merge all</string>
+    <string name="common_share_all">Share all</string>
+    <string name="common_play_album">Play album</string>
+    <string name="common_shuffle_play_album">Shuffle play album</string>
+    <string name="common_album_art_for_title">Album art for %1$s</string>
 </resources>

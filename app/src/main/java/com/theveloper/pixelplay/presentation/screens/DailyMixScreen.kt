@@ -64,10 +64,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.R
@@ -75,11 +76,11 @@ import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.AiPlaylistSheet
 import com.theveloper.pixelplay.presentation.components.DailyMixMenu
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
-import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.threeShapeSwitch
+import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.viewmodel.MainViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
@@ -90,6 +91,9 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -101,12 +105,16 @@ fun DailyMixScreen(
     navController: NavController,
 ) {
     Trace.beginSection("DailyMixScreen.Composition")
+    val dailyMixTitle = stringResource(R.string.daily_mix_title)
+    val playItLabel = stringResource(R.string.daily_mix_action_play_it)
+    val shuffleLabel = stringResource(R.string.common_shuffle)
     val dailyMixSongs: ImmutableList<Song> by playerViewModel.dailyMixSongs.collectAsStateWithLifecycle()
     val currentSongId by remember { playerViewModel.stablePlayerState.map { it.currentSong?.id }.distinctUntilChanged() }.collectAsStateWithLifecycle(initialValue = null)
     val isPlaying by remember { playerViewModel.stablePlayerState.map { it.isPlaying }.distinctUntilChanged() }.collectAsStateWithLifecycle(initialValue = false)
     val isShuffleEnabled by remember { playerViewModel.stablePlayerState.map { it.isShuffleEnabled }.distinctUntilChanged() }.collectAsStateWithLifecycle(initialValue = false)
+    val navBarCompactMode by playerViewModel.navBarCompactMode.collectAsStateWithLifecycle()
     val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomBarHeightDp = NavBarContentHeight + systemNavBarInset
+    val bottomBarHeightDp = resolveNavBarOccupiedHeight(systemNavBarInset, navBarCompactMode)
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
     val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val favoriteSongIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle()
@@ -114,7 +122,11 @@ fun DailyMixScreen(
 
     val showAiSheet by playerViewModel.showAiPlaylistSheet.collectAsStateWithLifecycle()
     val isGeneratingAiPlaylist by playerViewModel.isGeneratingAiPlaylist.collectAsStateWithLifecycle()
+    val aiStatus by playerViewModel.aiStatus.collectAsStateWithLifecycle()
     val aiError by playerViewModel.aiError.collectAsStateWithLifecycle()
+    val aiSuccess by playerViewModel.aiSuccess.collectAsStateWithLifecycle()
+    val isGeneratingAiMetadata by playerViewModel.isGeneratingAiMetadata.collectAsStateWithLifecycle()
+    val aiMetadataSuccess by playerViewModel.aiMetadataSuccess.collectAsStateWithLifecycle()
     val lazyListState = rememberLazyListState()
 
     var showSongInfoSheet by remember { mutableStateOf(false) }
@@ -132,13 +144,18 @@ fun DailyMixScreen(
     }
 
     if (showAiSheet) {
+        // AI Integration: Premium Material 3 Expressive sheet for interactive playlist curation
         AiPlaylistSheet(
             onDismiss = { playerViewModel.dismissAiPlaylistSheet() },
             onGenerateClick = { prompt, minLength, maxLength ->
+                // Optimize: Trigger background AI generation and track real-time status
                 playerViewModel.generateAiPlaylist(prompt, minLength, maxLength, saveAsPlaylist = false)
             },
             isGenerating = isGeneratingAiPlaylist,
-            error = aiError
+            isSuccess = aiSuccess,
+            status = aiStatus,
+            error = aiError,
+            onRetry = { playerViewModel.retryLastPlaylistGeneration() }
         )
     }
 
@@ -168,16 +185,13 @@ fun DailyMixScreen(
             onToggleFavorite = { playerViewModel.toggleFavoriteSpecificSong(song) },
             onDismiss = { showSongInfoSheet = false },
             onPlaySong = {
-                playerViewModel.showAndPlaySong(song, dailyMixSongs, "Daily Mix", isVoluntaryPlay = false)
-                showSongInfoSheet = false
+                playerViewModel.showAndPlaySong(song, dailyMixSongs, dailyMixTitle, isVoluntaryPlay = false)
             },
             onAddToQueue = {
                 playerViewModel.addSongToQueue(song)
-                showSongInfoSheet = false
             },
             onAddNextToQueue = {
                 playerViewModel.addSongNextToQueue(song)
-                showSongInfoSheet = false
             },
             onAddToPlayList = {
                 showPlaylistBottomSheet = true;
@@ -192,19 +206,41 @@ fun DailyMixScreen(
                 navController.navigateSafely(Screen.ArtistDetail.createRoute(song.artistId))
                 showSongInfoSheet = false
             },
+            onNavigateToArtistById = { artistId ->
+                navController.navigateSafely(Screen.ArtistDetail.createRoute(artistId))
+                showSongInfoSheet = false
+            },
             onNavigateToGenre = {
                 song.genre?.let {
                     navController.navigateSafely(Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")))
                 }
                 showSongInfoSheet = false
             },
-            onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate ->
-                playerViewModel.editSongMetadata(song, newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate)
+            onEditSong = { newTitle, newArtist, newAlbum, newAlbumArtist, newComposer, newGenre, newLyrics, newTrackNumber, newDiscNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
+                playerViewModel.editSongMetadata(
+                    song,
+                    newTitle,
+                    newArtist,
+                    newAlbum,
+                    newAlbumArtist,
+                    newComposer,
+                    newGenre,
+                    newLyrics,
+                    newTrackNumber,
+                    newDiscNumber,
+                    replayGainTrackGainDb,
+                    replayGainAlbumGainDb,
+                    coverArtUpdate
+                )
             },
             generateAiMetadata = { fields ->
                 playerViewModel.generateAiMetadata(song, fields)
             },
-            removeFromListTrigger = removeFromListTrigger
+            removeFromListTrigger = removeFromListTrigger,
+            isGeneratingMetadata = isGeneratingAiMetadata,
+            aiMetadataSuccess = aiMetadataSuccess,
+            aiError = aiError,
+            onRetryMetadata = { playerViewModel.retryLastMetadataGeneration() }
         )
 
         if (showPlaylistBottomSheet) {
@@ -259,7 +295,7 @@ fun DailyMixScreen(
                         Button(
                             onClick = {
                                 if (dailyMixSongs.isNotEmpty()) {
-                                    playerViewModel.playSongs(dailyMixSongs, dailyMixSongs.first(), "Daily Mix")
+                                    playerViewModel.playSongs(dailyMixSongs, dailyMixSongs.first(), dailyMixTitle)
                                     if (isShuffleEnabled) playerViewModel.toggleShuffle() // Desactivar shuffle si estaba activo
                                 }
                             },
@@ -272,19 +308,26 @@ fun DailyMixScreen(
                                 topEnd = 14.dp,
                                 bottomStart = 60.dp,
                                 bottomEnd = 14.dp
-                            )
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp),
                         ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = "Play", modifier = Modifier.size(
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = stringResource(R.string.common_play), modifier = Modifier.size(
                                 ButtonDefaults.IconSize))
                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                            Text("Play it")
+                            TightWrapText(
+                                text = playItLabel,
+                                modifier = Modifier.padding(end = 4.dp),
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 2,
+                                lineHeight = 20.sp
+                            )
                         }
                         FilledTonalButton(
                             onClick = {
                                 if (dailyMixSongs.isNotEmpty()) {
                                     playerViewModel.playSongsShuffled(
                                         songsToPlay = dailyMixSongs,
-                                        queueName = "Daily Mix",
+                                        queueName = dailyMixTitle,
                                         startAtZero = true,
                                     )
                                 }
@@ -298,12 +341,19 @@ fun DailyMixScreen(
                                 topEnd = 60.dp,
                                 bottomStart = 14.dp,
                                 bottomEnd = 60.dp
-                            )
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp),
                         ) {
-                            Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle", modifier = Modifier.size(
+                            Icon(Icons.Rounded.Shuffle, contentDescription = shuffleLabel, modifier = Modifier.size(
                                 ButtonDefaults.IconSize))
                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                            Text("Shuffle")
+                            TightWrapText(
+                                text = shuffleLabel,
+                                modifier = Modifier.padding(end = 4.dp),
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 2,
+                                lineHeight = 20.sp
+                            )
                         }
                     }
                 }
@@ -315,7 +365,7 @@ fun DailyMixScreen(
                         song = song,
                         isCurrentSong = stablePlayerState.currentSong?.id == song.id,
                         isPlaying = currentSongId == song.id && isPlaying,
-                        onClick = { playerViewModel.showAndPlaySong(song, dailyMixSongs, "Daily Mix", isVoluntaryPlay = false) },
+                        onClick = { playerViewModel.showAndPlaySong(song, dailyMixSongs, dailyMixTitle, isVoluntaryPlay = false) },
                         onMoreOptionsClick = {
                             playerViewModel.selectSongForInfo(song)
                             showSongInfoSheet = true
@@ -338,7 +388,7 @@ fun DailyMixScreen(
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = "Volver"
+                contentDescription = stringResource(R.string.common_back)
             )
         }
 
@@ -390,6 +440,7 @@ private fun ExpressiveDailyMixHeader(
     scrollState: LazyListState,
     onShowMenu: () -> Unit
 ) {
+    val dailyMixHeaderTitle = stringResource(R.string.daily_mix_title)
     Trace.beginSection("ExpressiveDailyMixHeader.Composition")
     val albumArts = remember(songs) { songs.map { it.albumArtUriString }.distinct().take(3) }
     val totalDuration = remember(songs) { songs.sumOf { it.duration } }
@@ -509,7 +560,7 @@ private fun ExpressiveDailyMixHeader(
                 horizontalAlignment = Alignment.Start
             ) {
                 Text(
-                    text = "Daily Mix",
+                    text = dailyMixHeaderTitle,
 //                    style = MaterialTheme.typography.headlineLarge,
                     style = titleStyle,
                     fontWeight = FontWeight.Bold,
@@ -518,7 +569,12 @@ private fun ExpressiveDailyMixHeader(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     modifier = Modifier.padding(start = 3.dp),
-                    text = "${songs.size} Songs • ${formatDuration(totalDuration)}",
+                    text = pluralStringResource(
+                        R.plurals.daily_mix_songs_dot_duration,
+                        songs.size,
+                        songs.size,
+                        formatDuration(totalDuration)
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
@@ -535,7 +591,7 @@ private fun ExpressiveDailyMixHeader(
                 Icon(
                     modifier = Modifier.size(20.dp),
                     painter = painterResource(R.drawable.gemini_ai),
-                    contentDescription = "Play"
+                    contentDescription = stringResource(R.string.daily_mix_cd_ai_playlist_generator)
                 )
             }
         }

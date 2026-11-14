@@ -23,7 +23,7 @@
     <a href="https://github.com/hejunlin1755/pixel_player_gd_studio/releases">
         <img src="https://img.shields.io/github/downloads/hejunlin1755/pixel_player_gd_studio/total?logo=github&style=for-the-badge" alt="Total Downloads">
     </a>
-    <img src="https://img.shields.io/badge/Android-10%2B-green?style=for-the-badge&logo=android" alt="Android 11+">
+    <img src="https://img.shields.io/badge/Android-11%2B-green?style=for-the-badge&logo=android" alt="Android 11+">
     <img src="https://img.shields.io/badge/Kotlin-100%25-purple?style=for-the-badge&logo=kotlin" alt="Kotlin">
 </p>
 
@@ -97,7 +97,7 @@
 
 ### ⚙️ Advanced Features
 - **Tag Editor** - Edit metadata with TagLib (MP3, FLAC, M4A support)
-- **AI Playlists** - Generate playlists with Gemini AI
+- **AI Playlists** - Generate playlists with AI (Supports Gemini, Deepseek, OpenAI, etc.)
 
 ---
 
@@ -124,7 +124,7 @@
 ## 📱 Requirements
 
 - **Android 11** (API 30) or higher
-- **4GB RAM** recommended for smooth performance
+- **6GB RAM** recommended for smooth performance
 
 ---
 
@@ -214,7 +214,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under a Proprietary License - see the [LICENSE](LICENSE) file for details.
 
 ---
 

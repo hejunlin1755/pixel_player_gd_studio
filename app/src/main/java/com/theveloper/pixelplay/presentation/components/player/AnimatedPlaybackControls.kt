@@ -3,10 +3,8 @@ package com.theveloper.pixelplay.presentation.components.player
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +24,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MotionScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,10 +32,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
@@ -76,6 +78,7 @@ fun AnimatedPlaybackControls(
 ) {
     val isPlaying = isPlayingProvider()
     var lastClicked by remember { mutableStateOf<PlaybackButtonType?>(null) }
+    var clickTrigger by remember { mutableStateOf(0) }
     val latestIsPlayingProvider by rememberUpdatedState(newValue = isPlayingProvider)
     val latestLastClicked by rememberUpdatedState(newValue = lastClicked)
     val isPlayPauseLocked =
@@ -83,10 +86,18 @@ fun AnimatedPlaybackControls(
     var playPauseVisualState by remember { mutableStateOf(isPlaying) }
     var pendingPlayPauseState by remember { mutableStateOf<Boolean?>(null) }
     val hapticFeedback = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(lastClicked) {
+    val motionScheme = remember { MotionScheme.expressive() }
+    val defaultSpatialDpSpec = remember { motionScheme.defaultSpatialSpec<Dp>() }
+
+    LaunchedEffect(lastClicked, clickTrigger) {
         if (lastClicked != null) {
-            delay(releaseDelay)
+            val delayTime = when (lastClicked) {
+                PlaybackButtonType.NEXT, PlaybackButtonType.PREVIOUS -> 600L
+                else -> releaseDelay
+            }
+            delay(delayTime)
             lastClicked = null
         }
     }
@@ -144,7 +155,11 @@ fun AnimatedPlaybackControls(
                     .background(colorPreviousButton)
                     .clickable {
                         lastClicked = PlaybackButtonType.PREVIOUS
-                        onPrevious()
+                        clickTrigger++
+                        coroutineScope.launch {
+                            delay(180)
+                            onPrevious()
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -163,30 +178,30 @@ fun AnimatedPlaybackControls(
             )
             val playCorner by animateDpAsState(
                 targetValue = if (!playPauseVisualState) playPauseCornerPlaying else playPauseCornerPaused,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMedium
-                ),
+                animationSpec = defaultSpatialDpSpec,
                 label = "playCorner"
-            )
-            val playShape = AbsoluteSmoothCornerShape(
-                cornerRadiusTL = playCorner,
-                smoothnessAsPercentTR = 60,
-                cornerRadiusBL = playCorner,
-                smoothnessAsPercentTL = 60,
-                cornerRadiusTR = playCorner,
-                smoothnessAsPercentBL = 60,
-                cornerRadiusBR = playCorner,
-                smoothnessAsPercentBR = 60
             )
             Box(
                 modifier = Modifier
                     .weight(playWeight)
                     .fillMaxHeight()
-                    .clip(playShape)
+                    .graphicsLayer {
+                        clip = true
+                        shape = AbsoluteSmoothCornerShape(
+                            cornerRadiusTL = playCorner,
+                            smoothnessAsPercentTR = 60,
+                            cornerRadiusBL = playCorner,
+                            smoothnessAsPercentTL = 60,
+                            cornerRadiusTR = playCorner,
+                            smoothnessAsPercentBL = 60,
+                            cornerRadiusBR = playCorner,
+                            smoothnessAsPercentBR = 60
+                        )
+                    }
                     .background(colorPlayPause)
                     .clickable {
                         lastClicked = PlaybackButtonType.PLAY_PAUSE
+                        clickTrigger++
                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onPlayPause()
                     },
@@ -195,7 +210,8 @@ fun AnimatedPlaybackControls(
                 MorphingPlayPauseIcon(
                     isPlaying = playPauseVisualState,
                     tint = tintPlayPauseIcon,
-                    size = playPauseIconSize
+                    size = playPauseIconSize,
+                    motionScheme = motionScheme
                 )
             }
 
@@ -212,7 +228,11 @@ fun AnimatedPlaybackControls(
                     .background(colorNextButton)
                     .clickable {
                         lastClicked = PlaybackButtonType.NEXT
-                        onNext()
+                        clickTrigger++
+                        coroutineScope.launch {
+                            delay(180)
+                            onNext()
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -232,10 +252,11 @@ private fun MorphingPlayPauseIcon(
     isPlaying: Boolean,
     tint: Color,
     size: Dp,
+    motionScheme: MotionScheme
 ) {
     Crossfade(
         targetState = isPlaying,
-        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        animationSpec = motionScheme.fastEffectsSpec(),
         label = "playPauseCrossfade"
     ) { playing ->
         Icon(

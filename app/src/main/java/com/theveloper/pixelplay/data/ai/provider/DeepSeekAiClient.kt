@@ -54,43 +54,76 @@ class DeepSeekAiClient(private val apiKey: String) : AiClient {
         isLenient = true
     }
     
-    override suspend fun generateContent(model: String, prompt: String): String {
+    override suspend fun generateContent(
+        model: String, 
+        systemPrompt: String, 
+        prompt: String,
+        temperature: Float
+    ): String {
         return withContext(Dispatchers.IO) {
+            val resolvedModel = model.ifBlank { DEFAULT_DEEPSEEK_MODEL }
+            val messagesList = mutableListOf<ChatMessage>()
+            if (systemPrompt.isNotBlank()) {
+                messagesList.add(ChatMessage(role = "system", content = systemPrompt))
+            }
+            messagesList.add(ChatMessage(role = "user", content = prompt))
+
             val requestBody = ChatRequest(
-                model = model.ifBlank { DEFAULT_DEEPSEEK_MODEL },
-                messages = listOf(ChatMessage(role = "user", content = prompt))
+                model = resolvedModel,
+                messages = messagesList,
+                temperature = temperature.toDouble()
             )
             
             val jsonBody = json.encodeToString(ChatRequest.serializer(), requestBody)
             val body = jsonBody.toRequestBody("application/json".toMediaType())
             
             val request = Request.Builder()
-                .url("$BASE_URL/v1/chat/completions")
+                .url("$BASE_URL/chat/completions")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
                 .post(body)
                 .build()
-            
-            val response = client.newCall(request).execute()
-            
-            if (!response.isSuccessful) {
-                throw Exception("DeepSeek API error: ${response.code} ${response.message}")
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    val responseBody = response.body.string()
+
+                    if (!response.isSuccessful) {
+                        throw AiProviderSupport.createException(
+                            providerName = "DeepSeek",
+                            statusCode = response.code,
+                            transportMessage = response.message,
+                            responseBody = responseBody,
+                            requestedModel = resolvedModel
+                        )
+                    }
+
+                    val chatResponse = json.decodeFromString<ChatResponse>(responseBody)
+                    chatResponse.choices.firstOrNull()?.message?.content
+                        ?: throw AiProviderSupport.createException(
+                            providerName = "DeepSeek",
+                            statusCode = response.code,
+                            transportMessage = "Response had no content",
+                            responseBody = responseBody,
+                            requestedModel = resolvedModel
+                        )
+                }
+            } catch (e: Exception) {
+                throw AiProviderSupport.wrapThrowable("DeepSeek", e, resolvedModel)
             }
-            
-            val responseBody = response.body?.string() 
-                ?: throw Exception("DeepSeek returned empty response")
-            
-            val chatResponse = json.decodeFromString<ChatResponse>(responseBody)
-            chatResponse.choices.firstOrNull()?.message?.content 
-                ?: throw Exception("DeepSeek response has no content")
         }
+    }
+    
+    override suspend fun countTokens(model: String, systemPrompt: String, prompt: String): Int {
+        // DeepSeek estimation
+        return (systemPrompt.length + prompt.length) / 4
     }
     
     override suspend fun getAvailableModels(apiKey: String): List<String> {
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$BASE_URL/v1/models")
+                    .url("$BASE_URL/models")
                     .addHeader("Authorization", "Bearer $apiKey")
                     .get()
                     .build()
@@ -101,7 +134,7 @@ class DeepSeekAiClient(private val apiKey: String) : AiClient {
                     return@withContext getDefaultModels()
                 }
                 
-                val responseBody = response.body?.string() ?: return@withContext getDefaultModels()
+                val responseBody = response.body.string()
                 val modelsResponse = json.decodeFromString<ModelsResponse>(responseBody)
                 modelsResponse.data.map { it.id }
             } catch (e: Exception) {
@@ -114,7 +147,7 @@ class DeepSeekAiClient(private val apiKey: String) : AiClient {
         return withContext(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("$BASE_URL/v1/models")
+                    .url("$BASE_URL/models")
                     .addHeader("Authorization", "Bearer $apiKey")
                     .get()
                     .build()

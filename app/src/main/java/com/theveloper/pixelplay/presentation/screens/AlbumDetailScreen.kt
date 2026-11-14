@@ -3,6 +3,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+import com.theveloper.pixelplay.presentation.navigation.navigateSafelyReplacing
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -56,7 +57,9 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp as lerpColor
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -72,10 +75,11 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.theveloper.pixelplay.ui.theme.LocalPixelPlayDarkTheme
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import com.theveloper.pixelplay.ui.theme.PixelPlayStatusBarStyle
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
 import coil.compose.AsyncImagePainter
@@ -84,19 +88,22 @@ import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Album
 import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
-import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
+import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.viewmodel.AlbumDetailViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
+import com.theveloper.pixelplay.utils.formatSongCount
 import com.theveloper.pixelplay.utils.shapes.RoundedStarShape
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.ui.res.stringResource
 
 private const val UseSharedCollapsibleTopBarProbe = true
 
@@ -113,11 +120,12 @@ fun AlbumDetailScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val favoriteIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle()
+    val navBarCompactMode by playerViewModel.navBarCompactMode.collectAsStateWithLifecycle()
 
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsStateWithLifecycle()
     val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomBarHeightDp = NavBarContentHeight + systemNavBarInset
+    val bottomBarHeightDp = resolveNavBarOccupiedHeight(systemNavBarInset, navBarCompactMode)
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
     val isDarkTheme = LocalPixelPlayDarkTheme.current
     val baseColorScheme = MaterialTheme.colorScheme
@@ -179,6 +187,9 @@ fun AlbumDetailScreen(
             uiState.album != null -> {
                 val album = uiState.album!!
                 val songs = uiState.songs
+                val songsByDisc = remember(songs) {
+                    songs.groupBy { it.discNumber ?: 1 }
+                }
                 val lazyListState = rememberLazyListState()
 
                 val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -279,6 +290,7 @@ fun AlbumDetailScreen(
                 ) {
                     val currentTopBarHeightDp = with(density) { topBarHeight.value.toDp() }
                     val showScrollBar =
+                        LocalShowScrollbar.current &&
                         collapseFraction > 0.95f &&
                             (lazyListState.canScrollForward || lazyListState.canScrollBackward)
 
@@ -299,22 +311,36 @@ fun AlbumDetailScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(
-                            items = songs,
-                            key = { song -> "album_song_${song.id}" },
-                            contentType = { "album_song" }
-                        ) { song ->
-                            EnhancedSongListItem(
-                                song = song,
-                                isCurrentSong = stablePlayerState.currentSong?.id == song.id,
-                                isPlaying = stablePlayerState.isPlaying,
-                                showAlbumArt = false,
-                                onMoreOptionsClick = {
-                                    playerViewModel.selectSongForInfo(song)
-                                    showSongInfoBottomSheet = true
-                                },
-                                onClick = { playerViewModel.showAndPlaySong(song, songs) }
-                            )
+                        songsByDisc.forEach { (discNumber, discSongs) ->
+                            if (songsByDisc.size > 1) {
+                                item(key = "disc_header_$discNumber") {
+                                    Text(
+                                        text = stringResource(R.string.album_disc_number_header, discNumber),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .padding(top = 16.dp, bottom = 8.dp, start = 8.dp)
+                                    )
+                                }
+                            }
+                            items(
+                                items = discSongs,
+                                key = { song -> "album_song_${song.id}" },
+                                contentType = { "album_song" }
+                            ) { song ->
+                                EnhancedSongListItem(
+                                    song = song,
+                                    isCurrentSong = stablePlayerState.currentSong?.id == song.id,
+                                    isPlaying = stablePlayerState.isPlaying,
+                                    showAlbumArt = false,
+                                    onMoreOptionsClick = {
+                                        playerViewModel.selectSongForInfo(song)
+                                        showSongInfoBottomSheet = true
+                                    },
+                                    onClick = { playerViewModel.showAndPlaySong(song, songs) }
+                                )
+                            }
                         }
                     }
 
@@ -395,44 +421,61 @@ fun AlbumDetailScreen(
                     onDismiss = { showSongInfoBottomSheet = false },
                     onPlaySong = {
                         playerViewModel.showAndPlaySong(currentSong)
-                        showSongInfoBottomSheet = false
                     },
                     onAddToQueue = {
                         playerViewModel.addSongToQueue(currentSong)
-                        showSongInfoBottomSheet = false
                     },
                     onAddNextToQueue = {
                         playerViewModel.addSongNextToQueue(currentSong)
-                        showSongInfoBottomSheet = false
                     },
                     onAddToPlayList = {
                         showPlaylistBottomSheet = true;
                     },
                     onDeleteFromDevice = playerViewModel::deleteFromDevice,
                     onNavigateToAlbum = {
-                        navController.navigateSafely(Screen.AlbumDetail.createRoute(currentSong.albumId))
+                        navController.navigateSafelyReplacing(
+                            route = Screen.AlbumDetail.createRoute(currentSong.albumId),
+                            patternToPop = Screen.AlbumDetail.route
+                        )
                         showSongInfoBottomSheet = false
                     },
                     onNavigateToArtist = {
-                        navController.navigateSafely(Screen.ArtistDetail.createRoute(currentSong.artistId))
+                        navController.navigateSafelyReplacing(
+                            route = Screen.ArtistDetail.createRoute(currentSong.artistId),
+                            patternToPop = Screen.ArtistDetail.route
+                        )
+                        showSongInfoBottomSheet = false
+                    },
+                    onNavigateToArtistById = { artistId ->
+                        navController.navigateSafelyReplacing(
+                            route = Screen.ArtistDetail.createRoute(artistId),
+                            patternToPop = Screen.ArtistDetail.route
+                        )
                         showSongInfoBottomSheet = false
                     },
                     onNavigateToGenre = {
                         currentSong.genre?.let {
-                            navController.navigateSafely(Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")))
+                            navController.navigateSafelyReplacing(
+                                route = Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")),
+                                patternToPop = Screen.GenreDetail.route
+                            )
                         }
                         showSongInfoBottomSheet = false
                     },
-                    onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate ->
+                    onEditSong = { newTitle, newArtist, newAlbum, newAlbumArtist, newComposer, newGenre, newLyrics, newTrackNumber, newDiscNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
                         playerViewModel.editSongMetadata(
                             currentSong,
                             newTitle,
                             newArtist,
                             newAlbum,
+                            newAlbumArtist,
+                            newComposer,
                             newGenre,
                             newLyrics,
                             newTrackNumber,
                             newDiscNumber,
+                            replayGainTrackGainDb,
+                            replayGainAlbumGainDb,
                             coverArtUpdate
                         )
                     },
@@ -487,8 +530,16 @@ private fun SharedAlbumTopBarProbe(
     val statusBarBrush = remember(statusBarColor) {
         Brush.verticalGradient(colors = listOf(statusBarColor, Color.Transparent))
     }
+    val expandedStatusBarFallback = remember(statusBarColor, surfaceColor) {
+        statusBarColor.compositeOver(surfaceColor)
+    }
+    val fallbackStatusBarColor = remember(expandedStatusBarFallback, surfaceColor, solidAlpha) {
+        lerpColor(expandedStatusBarFallback, surfaceColor, solidAlpha)
+    }
     val titleVerticalBias = lerp(1f, -1f, collapseFraction)
     val shuffleAlignment = BiasAlignment(horizontalBias = 1f, verticalBias = titleVerticalBias)
+
+    PixelPlayStatusBarStyle(color = fallbackStatusBarColor)
 
     Box(
         modifier = Modifier
@@ -499,7 +550,7 @@ private fun SharedAlbumTopBarProbe(
         if (expandedContentAlpha > 0.01f) {
             SmartImage(
                 model = album.albumArtUriString,
-                contentDescription = "Cover of ${album.title}",
+                contentDescription = stringResource(R.string.album_cover_for, album.title),
                 contentScale = ContentScale.Crop,
                 targetSize = headerImageRequestSize,
                 allowHardware = true,
@@ -525,7 +576,7 @@ private fun SharedAlbumTopBarProbe(
 
         CollapsibleCommonTopBar(
             title = album.title,
-            subtitle = "${album.artist} • $songsCount songs",
+            subtitle = "${album.artist} • ${formatSongCount(songsCount)}",
             collapseFraction = collapseFraction,
             headerHeight = headerHeight,
             onBackClick = onBackPressed,
@@ -547,7 +598,8 @@ private fun SharedAlbumTopBarProbe(
             expandedSubtitleMaxLines = 2,
             contentColor = MaterialTheme.colorScheme.onSurface,
             subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            fadeSubtitleOnCollapse = false
+            fadeSubtitleOnCollapse = false,
+            syncStatusBarWithContainer = false
         )
 
         LargeExtendedFloatingActionButton(
@@ -563,7 +615,7 @@ private fun SharedAlbumTopBarProbe(
                     alpha = expandedContentAlpha
                 }
         ) {
-            Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle play album")
+            Icon(Icons.Rounded.Shuffle, contentDescription = stringResource(R.string.common_shuffle_play_album))
         }
     }
 }
@@ -609,6 +661,13 @@ private fun CollapsingAlbumTopBar(
             )
         )
     }
+    val solidAlpha = (collapseFraction * 2f).coerceIn(0f, 1f)
+    val expandedStatusBarFallback = remember(statusBarColor, surfaceColor) {
+        statusBarColor.compositeOver(surfaceColor)
+    }
+    val fallbackStatusBarColor = remember(expandedStatusBarFallback, surfaceColor, solidAlpha) {
+        lerpColor(expandedStatusBarFallback, surfaceColor, solidAlpha)
+    }
 
     // Title animation
     val titleScale = lerp(1f, 0.75f, collapseFraction)
@@ -626,6 +685,8 @@ private fun CollapsingAlbumTopBar(
             .height(headerHeight)
             .clipToBounds()
     ) {
+        PixelPlayStatusBarStyle(color = fallbackStatusBarColor)
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -635,7 +696,7 @@ private fun CollapsingAlbumTopBar(
             if (showExpandedArtwork) {
                 SmartImage(
                     model = album.albumArtUriString,
-                    contentDescription = "Cover of ${album.title}",
+                    contentDescription = stringResource(R.string.album_cover_for, album.title),
                     contentScale = ContentScale.Crop,
                     targetSize = headerImageRequestSize,
                     allowHardware = true,
@@ -671,7 +732,7 @@ private fun CollapsingAlbumTopBar(
                     onClick = onBackPressed,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                 }
 
                 Box(
@@ -703,7 +764,11 @@ private fun CollapsingAlbumTopBar(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${album.artist} • $songsCount songs",
+                            text = stringResource(
+                                R.string.album_detail_meta_line,
+                                album.artist,
+                                formatSongCount(songsCount)
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -724,7 +789,7 @@ private fun CollapsingAlbumTopBar(
                             alpha = fabScale
                         }
                 ) {
-                    Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle play album")
+                    Icon(Icons.Rounded.Shuffle, contentDescription = stringResource(R.string.common_shuffle_play_album))
                 }
             }
         }

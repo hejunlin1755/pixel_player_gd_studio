@@ -21,7 +21,8 @@ object SourceType {
     const val GDRIVE = 3
     const val QQMUSIC = 4
     const val NAVIDROME = 5
-    const val GD = 6
+    const val JELLYFIN = 6
+    const val GD = 7
 
     /** Derive source type from a content URI string (fallback for migration / conversion). */
     fun fromContentUri(uri: String): Int = when {
@@ -30,6 +31,8 @@ object SourceType {
         uri.startsWith("gdrive://") -> GDRIVE
         uri.startsWith("qqmusic://") -> QQMUSIC
         uri.startsWith("navidrome://") -> NAVIDROME
+        uri.startsWith("jellyfin://") -> JELLYFIN
+        uri.startsWith("gdstudio:") -> GD
         else -> LOCAL
     }
 }
@@ -43,10 +46,13 @@ object SourceType {
         Index(value = ["artist_name"], unique = false),
         Index(value = ["genre"], unique = false),
         Index(value = ["parent_directory_path"], unique = false),
+        Index(value = ["file_path"], unique = false),
         Index(value = ["content_uri_string"], unique = false),
         Index(value = ["date_added"], unique = false),
         Index(value = ["duration"], unique = false),
-        Index(value = ["source_type"], unique = false)
+        Index(value = ["source_type"], unique = false),
+        Index(value = ["parent_directory_path", "source_type", "album_id"], unique = false),
+        Index(value = ["parent_directory_path", "source_type", "id"], unique = false)
     ],
     foreignKeys = [
         ForeignKey(
@@ -137,6 +143,9 @@ private fun SongEntity.toSongInternal(artists: List<ArtistRef>): Song {
         } else null,
         navidromeId = if (this.contentUriString.startsWith("navidrome://")) {
             this.contentUriString.removePrefix("navidrome://")
+        } else null,
+        jellyfinId = if (this.contentUriString.startsWith("jellyfin://")) {
+            this.contentUriString.removePrefix("jellyfin://")
         } else null,
         mimeType = this.mimeType,
         bitrate = this.bitrate,

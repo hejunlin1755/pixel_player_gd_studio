@@ -3,15 +3,11 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+import com.theveloper.pixelplay.presentation.navigation.navigateSafelyReplacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -50,7 +46,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp as lerpColor
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -63,26 +61,29 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.theveloper.pixelplay.ui.theme.LocalPixelPlayDarkTheme
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import com.theveloper.pixelplay.ui.theme.PixelPlayStatusBarStyle
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.util.lerp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.data.model.Artist
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
-import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
 import com.theveloper.pixelplay.presentation.components.SmartImageCompactListTargetSize
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
+import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.viewmodel.ArtistDetailViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.ArtistAlbumSection
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
+import com.theveloper.pixelplay.utils.formatSongCount
 import com.theveloper.pixelplay.utils.shapes.RoundedStarShape
 import kotlinx.coroutines.launch
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
@@ -97,6 +98,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Size
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 
 private const val UseSharedCollapsibleTopBarProbe = true
 
@@ -122,10 +125,11 @@ fun ArtistDetailScreen(
 
     val lazyListState = rememberLazyListState()
     val favoriteIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle()
+    val navBarCompactMode by playerViewModel.navBarCompactMode.collectAsStateWithLifecycle()
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsStateWithLifecycle()
     val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomBarHeightDp = NavBarContentHeight + systemNavBarInset
+    val bottomBarHeightDp = resolveNavBarOccupiedHeight(systemNavBarInset, navBarCompactMode)
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -279,8 +283,10 @@ fun ArtistDetailScreen(
                             .forEach { staleKey -> expandedSections.remove(staleKey) }
                     }
 
-                    val showScrollBar by remember {
+                    val isScrollbarEnabled = LocalShowScrollbar.current
+                    val showScrollBar by remember(isScrollbarEnabled) {
                         derivedStateOf {
+                            isScrollbarEnabled &&
                             collapseFraction > 0.95f &&
                                 (lazyListState.canScrollForward || lazyListState.canScrollBackward)
                         }
@@ -307,7 +313,6 @@ fun ArtistDetailScreen(
 
                             val sectionKey = section.collapseKey()
                             val isExpanded = expandedSections[sectionKey] ?: true
-                            
                             val sectionSongs = if (isTransitionFinished) section.songs else section.songs.take(5)
 
                             item(
@@ -328,35 +333,35 @@ fun ArtistDetailScreen(
                                 )
                             }
 
-                            item(
-                                key = "${sectionKey}_song_group_spacer",
-                                contentType = "artist_section_spacer"
-                            ) {
-                                AnimatedVisibility(
-                                    visible = isExpanded,
-                                    enter = expandVertically(animationSpec = tween(durationMillis = 260)) + fadeIn(animationSpec = tween(durationMillis = 180)),
-                                    exit = shrinkVertically(animationSpec = tween(durationMillis = 220)) + fadeOut(animationSpec = tween(durationMillis = 140))
+                            if (isExpanded) {
+                                item(
+                                    key = "${sectionKey}_song_group_spacer",
+                                    contentType = "artist_section_spacer"
                                 ) {
                                     Box(
                                         modifier = Modifier
+                                            .animateItem(
+                                                fadeInSpec = tween(durationMillis = 160),
+                                                fadeOutSpec = tween(durationMillis = 120),
+                                                placementSpec = tween(durationMillis = 180)
+                                            )
                                             .fillMaxWidth()
                                             .height(10.dp)
                                             .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f))
                                     )
                                 }
-                            }
 
-                            itemsIndexed(
-                                items = sectionSongs,
-                                key = { songIndex, song -> "${sectionKey}_song_${song.id}_$songIndex" },
-                                contentType = { _, _ -> "artist_section_song" }
-                            ) { songIndex, song ->
-                                AnimatedVisibility(
-                                    visible = isExpanded,
-                                    enter = expandVertically(animationSpec = tween(durationMillis = 280)) + fadeIn(animationSpec = tween(durationMillis = 200)),
-                                    exit = shrinkVertically(animationSpec = tween(durationMillis = 240)) + fadeOut(animationSpec = tween(durationMillis = 150))
-                                ) {
+                                itemsIndexed(
+                                    items = sectionSongs,
+                                    key = { songIndex, song -> "${sectionKey}_song_${song.id}_$songIndex" },
+                                    contentType = { _, _ -> "artist_section_song" }
+                                ) { songIndex, song ->
                                     ArtistAlbumSectionSongItem(
+                                        modifier = Modifier.animateItem(
+                                            fadeInSpec = tween(durationMillis = 180),
+                                            fadeOutSpec = tween(durationMillis = 120),
+                                            placementSpec = tween(durationMillis = 200)
+                                        ),
                                         song = song,
                                         songIndex = songIndex,
                                         songCount = section.songs.size,
@@ -388,7 +393,7 @@ fun ArtistDetailScreen(
 
                     }
 
-                    if (collapseFraction > 0.95f) {
+                    if (showScrollBar) {
                         ExpressiveScrollBar(
                             listState = lazyListState,
                             modifier = Modifier
@@ -472,36 +477,63 @@ fun ArtistDetailScreen(
                 onDismiss = { showSongInfoBottomSheet = false },
                 onPlaySong = {
                     playerViewModel.showAndPlaySong(currentSong)
-                    showSongInfoBottomSheet = false
                 },
                 onAddToQueue = {
                     playerViewModel.addSongToQueue(currentSong)
-                    showSongInfoBottomSheet = false
                 },
                 onAddNextToQueue = {
                     playerViewModel.addSongNextToQueue(currentSong)
-                    showSongInfoBottomSheet = false
                 },
                 onAddToPlayList = {
-                    showPlaylistBottomSheet = true;
+                    showPlaylistBottomSheet = true
                 },
                 onDeleteFromDevice = playerViewModel::deleteFromDevice,
                 onNavigateToAlbum = {
-                    navController.navigateSafely(Screen.AlbumDetail.createRoute(currentSong.albumId))
+                    navController.navigateSafelyReplacing(
+                        route = Screen.AlbumDetail.createRoute(currentSong.albumId),
+                        patternToPop = Screen.AlbumDetail.route
+                    )
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToArtist = {
-                    navController.navigateSafely(Screen.ArtistDetail.createRoute(currentSong.artistId))
+                    navController.navigateSafelyReplacing(
+                        route = Screen.ArtistDetail.createRoute(currentSong.artistId),
+                        patternToPop = Screen.ArtistDetail.route
+                    )
+                    showSongInfoBottomSheet = false
+                },
+                onNavigateToArtistById = { artistId ->
+                    navController.navigateSafelyReplacing(
+                        route = Screen.ArtistDetail.createRoute(artistId),
+                        patternToPop = Screen.ArtistDetail.route
+                    )
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToGenre = {
                     currentSong.genre?.let {
-                        navController.navigateSafely(Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")))
+                        navController.navigateSafelyReplacing(
+                            route = Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")),
+                            patternToPop = Screen.GenreDetail.route
+                        )
                     }
                     showSongInfoBottomSheet = false
                 },
-                onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate ->
-                    playerViewModel.editSongMetadata(currentSong, newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate)
+                onEditSong = { newTitle, newArtist, newAlbum, newAlbumArtist, newComposer, newGenre, newLyrics, newTrackNumber, newDiscNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
+                    playerViewModel.editSongMetadata(
+                        currentSong,
+                        newTitle,
+                        newArtist,
+                        newAlbum,
+                        newAlbumArtist,
+                        newComposer,
+                        newGenre,
+                        newLyrics,
+                        newTrackNumber,
+                        newDiscNumber,
+                        replayGainTrackGainDb,
+                        replayGainAlbumGainDb,
+                        coverArtUpdate
+                    )
                 },
                 generateAiMetadata = { fields ->
                     playerViewModel.generateAiMetadata(currentSong, fields)
@@ -545,7 +577,7 @@ private fun CollapsibleAlbumSectionHeader(
                 append(it.toString())
                 append(" • ")
             }
-            append("${section.songs.size} songs")
+            append(formatSongCount(section.songs.size))
         }
     }
 
@@ -608,11 +640,15 @@ private fun CollapsibleAlbumSectionHeader(
                     contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             ) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = "Play ${section.title}")
+                Icon(Icons.Rounded.PlayArrow, contentDescription = stringResource(R.string.artist_cd_play_title, section.title))
             }
             Icon(
                 imageVector = Icons.Rounded.ExpandMore,
-                contentDescription = if (isExpanded) "Collapse ${section.title}" else "Expand ${section.title}",
+                contentDescription = if (isExpanded) {
+                    stringResource(R.string.artist_cd_collapse_title, section.title)
+                } else {
+                    stringResource(R.string.artist_cd_expand_title, section.title)
+                },
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.graphicsLayer {
                     rotationZ = expandIconRotation
@@ -624,6 +660,7 @@ private fun CollapsibleAlbumSectionHeader(
 
 @Composable
 private fun ArtistAlbumSectionSongItem(
+    modifier: Modifier = Modifier,
     song: Song,
     songIndex: Int,
     songCount: Int,
@@ -663,7 +700,7 @@ private fun ArtistAlbumSectionSongItem(
     }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f), containerShape)
             .padding(horizontal = 8.dp)
@@ -726,8 +763,16 @@ private fun SharedArtistTopBarProbe(
     val statusBarBrush = remember(statusBarColor) {
         Brush.verticalGradient(colors = listOf(statusBarColor, Color.Transparent))
     }
+    val expandedStatusBarFallback = remember(statusBarColor, surfaceColor) {
+        statusBarColor.compositeOver(surfaceColor)
+    }
+    val fallbackStatusBarColor = remember(expandedStatusBarFallback, surfaceColor, solidAlpha) {
+        lerpColor(expandedStatusBarFallback, surfaceColor, solidAlpha)
+    }
     val titleVerticalBias = lerp(1f, -1f, collapseFraction)
     val shuffleAlignment = BiasAlignment(horizontalBias = 1f, verticalBias = titleVerticalBias)
+
+    PixelPlayStatusBarStyle(color = fallbackStatusBarColor)
 
     Box(
         modifier = Modifier
@@ -772,7 +817,7 @@ private fun SharedArtistTopBarProbe(
 
         CollapsibleCommonTopBar(
             title = artist.name,
-            subtitle = "$songsCount songs",
+            subtitle = formatSongCount(songsCount),
             collapseFraction = collapseFraction,
             headerHeight = headerHeight,
             onBackClick = onBackPressed,
@@ -795,6 +840,7 @@ private fun SharedArtistTopBarProbe(
             contentColor = MaterialTheme.colorScheme.onSurface,
             subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant,
             fadeSubtitleOnCollapse = false,
+            syncStatusBarWithContainer = false,
             actions = {
                 Box(
                     modifier = Modifier.padding(end = 12.dp, top = 4.dp)
@@ -807,7 +853,7 @@ private fun SharedArtistTopBarProbe(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Edit,
-                            contentDescription = "Edit artist image"
+                            contentDescription = stringResource(R.string.artist_cd_edit_image)
                         )
                     }
 
@@ -816,7 +862,7 @@ private fun SharedArtistTopBarProbe(
                         onDismissRequest = { showImageMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Change photo") },
+                            text = { Text(stringResource(R.string.artist_action_change_photo)) },
                             leadingIcon = {
                                 Icon(Icons.Rounded.AddAPhoto, contentDescription = null)
                             },
@@ -827,7 +873,7 @@ private fun SharedArtistTopBarProbe(
                         )
                         if (hasCustomImage) {
                             DropdownMenuItem(
-                                text = { Text("Reset to default") },
+                                text = { Text(stringResource(R.string.artist_action_reset_to_default)) },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.Delete, contentDescription = null)
                                 },
@@ -855,7 +901,7 @@ private fun SharedArtistTopBarProbe(
                     alpha = expandedContentAlpha
                 }
         ) {
-            Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle play artist")
+            Icon(Icons.Rounded.Shuffle, contentDescription = stringResource(R.string.artist_cd_shuffle_play))
         }
     }
 }
@@ -894,7 +940,19 @@ private fun CustomCollapsingTopBar(
         )
     }
     val statusBarBrush = remember(statusBarColor) {
-        Brush.verticalGradient(colors = listOf(statusBarColor, Color.Transparent))
+        Brush.verticalGradient(
+            colors = listOf(
+                statusBarColor,
+                Color.Transparent
+            )
+        )
+    }
+    val solidAlpha = (collapseFraction * 2f).coerceIn(0f, 1f)
+    val expandedStatusBarFallback = remember(statusBarColor, surfaceColor) {
+        statusBarColor.compositeOver(surfaceColor)
+    }
+    val fallbackStatusBarColor = remember(expandedStatusBarFallback, surfaceColor, solidAlpha) {
+        lerpColor(expandedStatusBarFallback, surfaceColor, solidAlpha)
     }
 
     // Title animation
@@ -913,6 +971,8 @@ private fun CustomCollapsingTopBar(
             .height(headerHeight)
             .clipToBounds()
     ) {
+        PixelPlayStatusBarStyle(color = fallbackStatusBarColor)
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -964,7 +1024,7 @@ private fun CustomCollapsingTopBar(
                     onClick = onBackPressed,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                    Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                 }
 
                 // Image edit button (visible only when header is mostly expanded)
@@ -981,14 +1041,14 @@ private fun CustomCollapsingTopBar(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                             contentColor = MaterialTheme.colorScheme.onSurface
                         ) {
-                            Icon(Icons.Rounded.Edit, contentDescription = "Edit artist image")
+                            Icon(Icons.Rounded.Edit, contentDescription = stringResource(R.string.artist_cd_edit_image))
                         }
                         DropdownMenu(
                             expanded = showImageMenu,
                             onDismissRequest = { showImageMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Change photo") },
+                                text = { Text(stringResource(R.string.artist_action_change_photo)) },
                                 leadingIcon = { Icon(Icons.Rounded.AddAPhoto, contentDescription = null) },
                                 onClick = {
                                     showImageMenu = false
@@ -997,7 +1057,7 @@ private fun CustomCollapsingTopBar(
                             )
                             if (hasCustomImage) {
                                 DropdownMenuItem(
-                                    text = { Text("Reset to default") },
+                                    text = { Text(stringResource(R.string.artist_action_reset_to_default)) },
                                     leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
                                     onClick = {
                                         showImageMenu = false
@@ -1040,7 +1100,7 @@ private fun CustomCollapsingTopBar(
                         )
 
                         Text(
-                            text = "$songsCount songs",
+                            text = formatSongCount(songsCount),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -1062,7 +1122,7 @@ private fun CustomCollapsingTopBar(
                             alpha = fabScale
                         }
                 ) {
-                    Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle play album")
+                    Icon(Icons.Rounded.Shuffle, contentDescription = stringResource(R.string.common_shuffle_play_album))
                 }
             }
         }

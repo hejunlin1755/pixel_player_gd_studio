@@ -37,6 +37,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,23 +46,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
+import com.theveloper.pixelplay.data.preferences.AlbumArtColorAccuracy
 import com.theveloper.pixelplay.data.preferences.AlbumArtPaletteStyle
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
+import com.theveloper.pixelplay.presentation.viewmodel.ColorSchemePair
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.SettingsViewModel
 import com.theveloper.pixelplay.ui.theme.LocalPixelPlayDarkTheme
 import com.theveloper.pixelplay.ui.theme.generateColorSchemeFromSeed
+import kotlin.math.roundToInt
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +92,7 @@ fun PaletteStyleSettingsScreen(
 
     val currentSong = stablePlayerState.currentSong
     val isMiniPlayerVisible = currentSong != null
-    val seedKey = currentSong?.albumArtUriString ?: currentSong?.id?.toString() ?: "system"
+    val seedKey = currentSong?.albumArtUriString ?: currentSong?.id ?: "system"
     var seedColor by remember(seedKey) { mutableStateOf<Color?>(null) }
 
     LaunchedEffect(seedKey, albumSchemePair, baseScheme.primary) {
@@ -106,12 +116,51 @@ fun PaletteStyleSettingsScreen(
     }
 
     var pendingStyle by remember { mutableStateOf(uiState.albumArtPaletteStyle) }
+    var pendingAccuracy by remember { mutableStateOf(uiState.albumArtColorAccuracy) }
     LaunchedEffect(uiState.albumArtPaletteStyle) {
         pendingStyle = uiState.albumArtPaletteStyle
     }
+    LaunchedEffect(uiState.albumArtColorAccuracy) {
+        pendingAccuracy = uiState.albumArtColorAccuracy
+    }
 
-    val hasPendingChanges = pendingStyle != uiState.albumArtPaletteStyle
-    val previewScheme = styleSchemes[pendingStyle] ?: albumScheme
+    var previewSchemePair by remember(currentSong?.albumArtUriString) {
+        mutableStateOf<ColorSchemePair?>(albumSchemePair)
+    }
+    LaunchedEffect(
+        currentSong?.albumArtUriString,
+        pendingStyle,
+        pendingAccuracy,
+        uiState.albumArtPaletteStyle,
+        uiState.albumArtColorAccuracy,
+        albumSchemePair
+    ) {
+        val artUriString = currentSong?.albumArtUriString
+        if (artUriString.isNullOrBlank()) {
+            previewSchemePair = albumSchemePair
+            return@LaunchedEffect
+        }
+
+        val matchesApplied =
+            pendingStyle == uiState.albumArtPaletteStyle &&
+                pendingAccuracy == uiState.albumArtColorAccuracy
+        previewSchemePair = if (matchesApplied && albumSchemePair != null) {
+            albumSchemePair
+        } else {
+            settingsViewModel.getAlbumArtPalettePreview(
+                uriString = artUriString,
+                style = pendingStyle,
+                accuracyLevel = pendingAccuracy
+            ) ?: albumSchemePair
+        }
+    }
+
+    val hasPendingChanges =
+        pendingStyle != uiState.albumArtPaletteStyle ||
+            pendingAccuracy != uiState.albumArtColorAccuracy
+    val previewScheme = previewSchemePair?.let { pair ->
+        if (isDarkTheme) pair.dark else pair.light
+    } ?: styleSchemes[pendingStyle] ?: albumScheme
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val contentBottomPadding = bottomInset + if (isMiniPlayerVisible) MiniPlayerHeight + 12.dp else 16.dp
 
@@ -121,7 +170,12 @@ fun PaletteStyleSettingsScreen(
             PaletteStyleHeader(
                 scheme = previewScheme,
                 onBackClick = onBackClick,
-                onApplyClick = { settingsViewModel.setAlbumArtPaletteStyle(pendingStyle) },
+                onApplyClick = {
+                    settingsViewModel.setAlbumArtPaletteSettings(
+                        style = pendingStyle,
+                        accuracyLevel = pendingAccuracy
+                    )
+                },
                 applyEnabled = hasPendingChanges
             )
         }
@@ -153,13 +207,13 @@ fun PaletteStyleSettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Palette style",
+                        text = stringResource(R.string.settings_palette_style_title),
                         style = MaterialTheme.typography.titleLarge,
                         color = previewScheme.onSurface,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Choose the album colors for the player UI.",
+                        text = stringResource(R.string.settings_palette_style_subtitle),
                         style = MaterialTheme.typography.bodyMedium,
                         color = previewScheme.onSurfaceVariant
                     )
@@ -182,7 +236,7 @@ fun PaletteStyleSettingsScreen(
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = pendingStyle.label,
+                        text = albumArtPaletteStyleLabel(pendingStyle),
                         style = MaterialTheme.typography.titleMedium,
                         color = previewScheme.onSurface,
                         fontWeight = FontWeight.Medium
@@ -199,11 +253,19 @@ fun PaletteStyleSettingsScreen(
                             modifier = Modifier
                                 .padding(8.dp)
                                 .padding(start = 4.dp),
-                            text = pendingStyle.description(),
+                            text = albumArtPaletteStyleDescription(pendingStyle),
                             style = MaterialTheme.typography.bodyMedium,
                             color = previewScheme.onTertiaryContainer
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+                    PaletteAccuracySlider(
+                        scheme = previewScheme,
+                        value = pendingAccuracy,
+                        hapticsEnabled = uiState.hapticsEnabled,
+                        onValueChange = { pendingAccuracy = it }
+                    )
                 }
             }
 
@@ -236,14 +298,14 @@ private fun PaletteStyleHeader(
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close"
+                    contentDescription = stringResource(R.string.common_close)
                 )
             }
 
             Spacer(modifier = Modifier.width(12.dp))
 
             Text(
-                text = "Colors",
+                text = stringResource(R.string.settings_palette_screen_title),
                 style = MaterialTheme.typography.headlineMedium,
                 color = scheme.onSurface,
                 modifier = Modifier.weight(1f)
@@ -262,7 +324,7 @@ private fun PaletteStyleHeader(
                 )
             ) {
                 Text(
-                    text = "Apply",
+                    text = stringResource(R.string.common_apply),
                     style = MaterialTheme.typography.titleMedium
                 )
             }
@@ -477,6 +539,7 @@ private fun MiniFullPlayerSkeletonPreview(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PaletteSwatchSquare(
     scheme: ColorScheme,
@@ -487,8 +550,6 @@ private fun PaletteSwatchSquare(
     BoxWithConstraints(
         modifier = modifier
             .aspectRatio(1f)
-            .clickable(onClick = onClick)
-            .clip(RoundedCornerShape(12.dp))
     ) {
         val circleRadius = maxWidth / 2
         val innerCorner by animateDpAsState(
@@ -509,10 +570,11 @@ private fun PaletteSwatchSquare(
         )
 
         Surface(
+            onClick = onClick,
             color = scheme.surfaceContainerHighest,
             shape = RoundedCornerShape(outerCorner),
             border = if (borderWidth > 0.dp) BorderStroke(borderWidth, scheme.primary) else null,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize() 
         ) {
             Box(
                 modifier = Modifier
@@ -560,11 +622,137 @@ private fun PaletteSwatchSquare(
     }
 }
 
-private fun AlbumArtPaletteStyle.description(): String {
-    return when (this) {
-        AlbumArtPaletteStyle.TONAL_SPOT -> "Balanced and calm."
-        AlbumArtPaletteStyle.VIBRANT -> "High saturation accents."
-        AlbumArtPaletteStyle.EXPRESSIVE -> "Bold hue shifts and contrast."
-        AlbumArtPaletteStyle.FRUIT_SALAD -> "Playful rotated accents."
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PaletteAccuracySlider(
+    scheme: ColorScheme,
+    value: Int,
+    hapticsEnabled: Boolean,
+    onValueChange: (Int) -> Unit
+) {
+    val clampedValue = AlbumArtColorAccuracy.clamp(value)
+    val hapticFeedback = LocalHapticFeedback.current
+    var lastDispatchedValue by remember { mutableIntStateOf(clampedValue) }
+
+    LaunchedEffect(clampedValue) {
+        lastDispatchedValue = clampedValue
+    }
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_palette_style_color_accuracy_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = scheme.onSurface,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = stringResource(R.string.settings_palette_style_color_accuracy_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = scheme.primaryContainer,
+                        shape = CircleShape
+                    )
+            ) {
+                Text(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    text = accuracySummaryText(clampedValue),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = scheme.onPrimaryContainer,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+
+        Slider(
+            value = clampedValue.toFloat(),
+            onValueChange = {
+                val nextValue = AlbumArtColorAccuracy.clamp(it.roundToInt())
+                if (nextValue == lastDispatchedValue) return@Slider
+
+                if (hapticsEnabled) {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                lastDispatchedValue = nextValue
+                onValueChange(nextValue)
+            },
+            valueRange = AlbumArtColorAccuracy.MIN.toFloat()..AlbumArtColorAccuracy.MAX.toFloat(),
+            steps = AlbumArtColorAccuracy.STEPS,
+            colors = SliderDefaults.colors(
+                thumbColor = scheme.primary,
+                activeTrackColor = scheme.primary,
+                inactiveTrackColor = scheme.surfaceContainerHighest,
+                activeTickColor = scheme.primary,
+                inactiveTickColor = scheme.onSurfaceVariant.copy(alpha = 0.22f)
+            )
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.settings_palette_style_accuracy_current),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant
+            )
+            Text(
+                text = stringResource(R.string.settings_palette_style_accuracy_more_accurate),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun albumArtPaletteStyleDescription(style: AlbumArtPaletteStyle): String =
+    stringResource(
+        when (style) {
+            AlbumArtPaletteStyle.TONAL_SPOT -> R.string.settings_palette_style_tonal_spot_desc
+            AlbumArtPaletteStyle.VIBRANT -> R.string.settings_palette_style_vibrant_desc
+            AlbumArtPaletteStyle.EXPRESSIVE -> R.string.settings_palette_style_expressive_desc
+            AlbumArtPaletteStyle.FRUIT_SALAD -> R.string.settings_palette_style_fruit_salad_desc
+        }
+    )
+
+@Composable
+private fun albumArtPaletteStyleLabel(style: AlbumArtPaletteStyle): String =
+    stringResource(
+        when (style) {
+            AlbumArtPaletteStyle.TONAL_SPOT -> R.string.settings_palette_style_tonal_spot
+            AlbumArtPaletteStyle.VIBRANT -> R.string.settings_palette_style_vibrant
+            AlbumArtPaletteStyle.EXPRESSIVE -> R.string.settings_palette_style_expressive
+            AlbumArtPaletteStyle.FRUIT_SALAD -> R.string.settings_palette_style_fruit_salad
+        }
+    )
+
+@Composable
+private fun accuracySummaryText(value: Int): String {
+    val clamped = AlbumArtColorAccuracy.clamp(value)
+    return when {
+        clamped == 0 -> stringResource(R.string.settings_palette_style_accuracy_summary_current)
+        clamped in 1..3 -> stringResource(R.string.settings_palette_style_accuracy_summary_subtle, clamped)
+        clamped in 4..7 -> stringResource(R.string.settings_palette_style_accuracy_summary_balanced, clamped)
+        else -> stringResource(R.string.settings_palette_style_accuracy_summary_precise, clamped)
     }
 }

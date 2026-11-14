@@ -67,7 +67,6 @@ import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -82,6 +81,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -376,8 +376,8 @@ fun AboutScreen(
 
             item(key = "maintainer_title") {
                 AboutSectionHeader(
-                    title = "Maintainer",
-                    subtitle = "The person behind PixelPlayer.",
+                    title = stringResource(R.string.about_maintainer_title),
+                    subtitle = stringResource(R.string.about_maintainer_subtitle),
                     modifier = Modifier.padding(top = 24.dp),
                 )
             }
@@ -396,8 +396,8 @@ fun AboutScreen(
 
             item(key = "spotlight_title") {
                 AboutSectionHeader(
-                    title = "Community Spotlight",
-                    subtitle = "Recognition for collaborators with major impact.",
+                    title = stringResource(R.string.about_spotlight_title),
+                    subtitle = stringResource(R.string.about_spotlight_subtitle),
                     modifier = Modifier.padding(top = 24.dp),
                 )
             }
@@ -420,8 +420,8 @@ fun AboutScreen(
 
             item(key = "contributors_title") {
                 AboutSectionHeader(
-                    title = "Open Source Contributors",
-                    subtitle = "Live contributor list from GitHub.",
+                    title = stringResource(R.string.about_contributors_section_title),
+                    subtitle = stringResource(R.string.about_contributors_section_subtitle),
                     modifier = Modifier.padding(top = 24.dp),
                 )
             }
@@ -448,7 +448,7 @@ fun AboutScreen(
                         tonalElevation = 1.dp,
                     ) {
                         Text(
-                            text = "No contributors found right now. Please try again later.",
+                            text = stringResource(R.string.about_no_contributors),
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -479,7 +479,7 @@ fun AboutScreen(
         }
 
         CollapsibleCommonTopBar(
-            title = "About",
+            title = stringResource(R.string.about_screen_title),
             collapseFraction = collapseFraction,
             headerHeight = currentTopBarHeightDp,
             onBackClick = onNavigationIconClick,
@@ -505,17 +505,7 @@ private fun AboutHeroCard(
         tonalElevation = 2.dp,
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    brush = Brush.linearGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
-                            MaterialTheme.colorScheme.surfaceContainerLow,
-                        ),
-                    ),
-                ),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
                 modifier = Modifier
@@ -545,14 +535,14 @@ private fun AboutHeroCard(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
-                            text = "PixelPlayer",
+                            text = stringResource(R.string.about_app_name),
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "Open source music player built with its community.",
+                            text = stringResource(R.string.about_tagline),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -577,7 +567,7 @@ private fun AboutHeroCard(
                         },
                 ) {
                     Text(
-                        text = "Version v$versionName",
+                        text = stringResource(R.string.about_version_format, versionName),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -597,9 +587,9 @@ private fun AboutHeroCard(
 @Composable
 private fun CommunitySignalsRow() {
     val labels = listOf(
-        "Open source" to Icons.Rounded.Public,
-        "Community-first" to Icons.Rounded.AutoAwesome,
-        "Material 3 Expressive" to Icons.Rounded.Palette,
+        stringResource(R.string.about_signal_open_source) to Icons.Rounded.Public,
+        stringResource(R.string.about_signal_community_first) to Icons.Rounded.AutoAwesome,
+        stringResource(R.string.about_signal_material3) to Icons.Rounded.Palette,
     )
 
     FlowRow(
@@ -743,7 +733,12 @@ private fun ContributorCard(
                         ContributorLabel(text = badge)
                     }
                     if (showContributionCount && contributor.contributions != null) {
-                        ContributorLabel(text = "${contributor.contributions} contrib.")
+                        ContributorLabel(
+                            text = stringResource(
+                                R.string.about_contributions_format,
+                                contributor.contributions,
+                            ),
+                        )
                     }
                 }
             }
@@ -754,12 +749,12 @@ private fun ContributorCard(
             ) {
                 SocialIconButton(
                     painterRes = R.drawable.github,
-                    contentDescription = "Open GitHub profile",
+                    contentDescription = stringResource(R.string.about_cd_open_github_profile),
                     url = contributor.githubUrl,
                 )
                 SocialIconButton(
                     painterRes = R.drawable.telegram,
-                    contentDescription = "Open Telegram",
+                    contentDescription = stringResource(R.string.about_cd_open_telegram),
                     url = contributor.telegramUrl,
                 )
             }
@@ -808,7 +803,7 @@ private fun ContributorAvatar(
             cachedBitmap != null -> {
                 Image(
                     bitmap = cachedBitmap!!,
-                    contentDescription = "Avatar of $name",
+                    contentDescription = stringResource(R.string.about_cd_contributor_avatar, name),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
@@ -819,7 +814,7 @@ private fun ContributorAvatar(
                         .data(avatarUrl)
                         .crossfade(true)
                         .build(),
-                    contentDescription = "Avatar of $name",
+                    contentDescription = stringResource(R.string.about_cd_contributor_avatar, name),
                     modifier = Modifier.fillMaxSize(),
                     shape = CircleShape,
                     contentScale = ContentScale.Crop,
@@ -828,11 +823,7 @@ private fun ContributorAvatar(
                     targetSize = Size(96, 96),
                     onState = { state ->
                         if (state is AsyncImagePainter.State.Success) {
-                            val drawable = state.result.drawable
-                            val bitmap = drawable?.toBitmap()?.asImageBitmap()
-                            if (bitmap != null) {
-                                cachedBitmap = bitmap
-                            }
+                            cachedBitmap = state.result.drawable.toBitmap().asImageBitmap()
                         }
                     },
                 )
@@ -846,7 +837,7 @@ private fun ContributorAvatar(
                 ) {
                     Icon(
                         painter = painterResource(iconRes),
-                        contentDescription = "Icon of $name",
+                        contentDescription = stringResource(R.string.about_cd_contributor_icon, name),
                         tint = iconTint,
                         modifier = Modifier.size(28.dp),
                     )
@@ -860,7 +851,7 @@ private fun ContributorAvatar(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = initial.toString(),
+                        text = initial,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = letterTint,
                     )

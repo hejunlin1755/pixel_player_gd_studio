@@ -23,7 +23,6 @@ internal data class PlayerUiStateSearchSlice(
 @Immutable
 data class PlayerUiState(
     // val allSongs: ImmutableList<Song> = persistentListOf(), // REMOVED
-    val currentPosition: Long = 0L,
     val currentPlaybackQueue: ImmutableList<Song> = persistentListOf(),
     val currentQueueSourceName: String = "All Songs",
     // val albums: ImmutableList<Album> = persistentListOf(), // REMOVED
@@ -57,7 +56,7 @@ data class PlayerUiState(
     val currentAlbumSortOption: SortOption = SortOption.AlbumTitleAZ,
     val currentArtistSortOption: SortOption = SortOption.ArtistNameAZ,
     val currentFolderSortOption: SortOption = SortOption.FolderNameAZ,
-    val folderBackGestureNavigationEnabled: Boolean = false,
+    val folderBackGestureNavigationEnabled: Boolean = true,
     val currentSongSortOption: SortOption = SortOption.SongTitleAZ,
     // val songCount: Int = 0, // REMOVED
     val isGeneratingAiMetadata: Boolean = false,
@@ -66,6 +65,7 @@ data class PlayerUiState(
     val isSyncingLibrary: Boolean = false,
     val selectedSearchFilter: SearchFilterType = SearchFilterType.ALL,
     val currentStorageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL,
+    val hideLocalMedia: Boolean = false,
     val showQueueItemUndoBar: Boolean = false,
     val lastRemovedQueueSong: Song? = null,
     val lastRemovedQueueIndex: Int = -1

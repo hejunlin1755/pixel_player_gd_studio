@@ -25,7 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Deselect
-import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 
 private val buttonHeight = 44.dp
@@ -126,7 +128,7 @@ fun SelectionActionRow(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "All",
+                    text = stringResource(R.string.library_selection_all),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Medium,
                     fontFamily = GoogleSansRounded
@@ -151,7 +153,7 @@ fun SelectionActionRow(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Deselect",
+                    text = stringResource(R.string.library_selection_deselect),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Medium,
                     fontFamily = GoogleSansRounded
@@ -169,20 +171,13 @@ fun SelectionActionRow(
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
             ),
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            modifier = Modifier.height(buttonHeight)
+            contentPadding = PaddingValues(horizontal = 2.dp),
+            modifier = Modifier.height(buttonHeight).width(36.dp)
         ) {
             Icon(
-                imageVector = Icons.Rounded.MoreHoriz,
-                contentDescription = "More options",
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = stringResource(R.string.library_selection_more_options),
                 modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Options",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Medium,
-                fontFamily = GoogleSansRounded
             )
         }
     }

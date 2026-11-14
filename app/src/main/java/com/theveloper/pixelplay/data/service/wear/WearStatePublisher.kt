@@ -1,33 +1,36 @@
 package com.theveloper.pixelplay.data.service.wear
-
+ 
 import android.app.Application
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
 import android.media.AudioManager
 import android.net.Uri
 import androidx.core.graphics.ColorUtils
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import com.theveloper.pixelplay.data.preferences.dataStore
 import com.theveloper.pixelplay.data.model.PlayerInfo
 import com.theveloper.pixelplay.shared.WearDataPaths
+import com.theveloper.pixelplay.shared.WearLyrics
 import com.theveloper.pixelplay.shared.WearPlayerState
+import com.theveloper.pixelplay.shared.WearSyncedLyricLine
 import com.theveloper.pixelplay.shared.WearThemePalette
 import com.theveloper.pixelplay.utils.AlbumArtUtils
+import com.theveloper.pixelplay.utils.ArtworkTransportSanitizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
-import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /**
  * Publishes player state to the Wear Data Layer so the watch app can display it.
@@ -39,19 +42,32 @@ class WearStatePublisher @Inject constructor(
     private val application: Application,
 ) {
     private val dataClient by lazy { Wearable.getDataClient(application) }
-    private val contentResolver by lazy { application.contentResolver }
     private val audioManager by lazy {
         application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
 
+    private val artworkCacheLock = Any()
+    private var lastArtworkUri: String? = null
+    private var lastRawBitmapData: ByteArray? = null
+    private var cachedWearArtAsset: Asset? = null
+
+    /**
+     * Clear the cached artwork assets.
+     */
+    fun clearCache() {
+        synchronized(artworkCacheLock) {
+            lastArtworkUri = null
+            lastRawBitmapData = null
+            cachedWearArtAsset = null
+        }
+        Timber.tag(TAG).d("Cleared Wear artwork cache")
+    }
+
     companion object {
         private const val TAG = "WearStatePublisher"
-        private const val ART_MAX_DIMENSION = 2048 // px, near-original quality on watch screens
-        private const val ART_QUALITY = 99 // JPEG quality
-        private const val MAX_DIRECT_ASSET_BYTES = 10_000_000 // keep full assets when practical
-        private const val MAX_URI_BYTES = 12_000_000 // hard cap for URI direct reads
+        private const val MAX_WEAR_LYRIC_LINES = 180
     }
 
     /**
@@ -75,6 +91,7 @@ class WearStatePublisher @Inject constructor(
      * Clear state from the Data Layer (e.g. when service is destroyed).
      */
     fun clearState() {
+        clearCache()
         scope.launch {
             try {
                 val request = PutDataMapRequest.create(WearDataPaths.PLAYER_STATE).apply {
@@ -91,8 +108,16 @@ class WearStatePublisher @Inject constructor(
     }
 
     private suspend fun publishStateInternal(songId: String?, playerInfo: PlayerInfo) {
+        // Read lyrics display preferences from DataStore so the watch respects
+        // the same translation/romanization visibility as the phone UI.
+        val prefs = application.dataStore.data.first()
+        val showLyricsTranslation = prefs[booleanPreferencesKey("show_lyrics_translation")] ?: true
+        val showLyricsRomanization = prefs[booleanPreferencesKey("show_lyrics_romanization")] ?: true
+
         val volumeLevel = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val volumeMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+
+        val wearLyrics = playerInfo.lyrics?.toWearLyrics(showLyricsTranslation, showLyricsRomanization)
 
         val wearState = WearPlayerState(
             songId = songId.orEmpty(),
@@ -109,6 +134,7 @@ class WearStatePublisher @Inject constructor(
             volumeMax = volumeMax,
             themePalette = buildWearThemePalette(playerInfo),
             queueRevision = playerInfo.wearQueueRevision,
+            lyrics = wearLyrics,
         )
 
         val stateJson = json.encodeToString(wearState)
@@ -117,9 +143,8 @@ class WearStatePublisher @Inject constructor(
             dataMap.putString(WearDataPaths.KEY_STATE_JSON, stateJson)
             dataMap.putLong(WearDataPaths.KEY_TIMESTAMP, System.currentTimeMillis())
 
-            // Attach album art as Asset if available
-            val wearArtBytes = resolveArtworkBytesForWear(playerInfo)
-            val artAsset = createAlbumArtAsset(wearArtBytes)
+            // Attach album art as Asset if available (cached to prevent duplicate processing)
+            val artAsset = getOrCreateWearArtworkAsset(playerInfo)
             if (artAsset != null) {
                 dataMap.putAsset(WearDataPaths.KEY_ALBUM_ART, artAsset)
             } else {
@@ -131,174 +156,117 @@ class WearStatePublisher @Inject constructor(
         Timber.tag(TAG).d("Published state to Wear: ${wearState.songTitle} (playing=${wearState.isPlaying})")
     }
 
+    private fun getOrCreateWearArtworkAsset(playerInfo: PlayerInfo): Asset? {
+        val uriString = playerInfo.albumArtUri
+        val rawBitmapData = playerInfo.albumArtBitmapData
+
+        synchronized(artworkCacheLock) {
+            val uriMatches = uriString == lastArtworkUri
+            val dataMatches = if (rawBitmapData == null && lastRawBitmapData == null) {
+                true
+            } else if (rawBitmapData != null && lastRawBitmapData != null) {
+                rawBitmapData === lastRawBitmapData || rawBitmapData.contentEquals(lastRawBitmapData)
+            } else {
+                false
+            }
+            if (uriMatches && dataMatches) {
+                return cachedWearArtAsset
+            }
+        }
+
+        val sanitizedBytes = resolveArtworkBytesForWear(playerInfo)
+        val asset = if (sanitizedBytes != null) {
+            try {
+                Asset.createFromBytes(sanitizedBytes)
+            } catch (e: Exception) {
+                Timber.tag(TAG).w(e, "Failed to create album art asset")
+                null
+            }
+        } else {
+            null
+        }
+
+        synchronized(artworkCacheLock) {
+            lastArtworkUri = uriString
+            lastRawBitmapData = rawBitmapData
+            cachedWearArtAsset = asset
+        }
+
+        return asset
+    }
+
     private fun resolveArtworkBytesForWear(playerInfo: PlayerInfo): ByteArray? {
         val uriString = playerInfo.albumArtUri
         if (!uriString.isNullOrBlank()) {
-            readBytesFromUriCapped(uriString, MAX_URI_BYTES)?.let { return it }
-            renderUriArtworkForWear(uriString)?.let { return it }
-        }
-        return playerInfo.albumArtBitmapData
-    }
-
-    private fun readBytesFromUriCapped(uriString: String, maxBytes: Int): ByteArray? {
-        return try {
             val uri = Uri.parse(uriString)
-            AlbumArtUtils.openArtworkInputStream(application, uri)?.use { input ->
-                val buffer = ByteArray(16 * 1024)
-                val output = ByteArrayOutputStream()
-                var total = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    total += read
-                    if (total > maxBytes) {
-                        Timber.tag(TAG).d(
-                            "Artwork URI too large for direct transfer (%d bytes): %s",
-                            total,
-                            uriString
-                        )
-                        return null
-                    }
-                    output.write(buffer, 0, read)
+            val scheme = uri.scheme?.lowercase()
+            when {
+                com.theveloper.pixelplay.utils.LocalArtworkUri.isLocalArtworkUri(uriString) ||
+                    scheme == "content" ||
+                    scheme == "file" ||
+                    scheme == "android.resource" -> {
+                    AlbumArtUtils.openArtworkInputStream(application, uri)?.use { input ->
+                        readBytesCapped(input, ArtworkTransportSanitizer.WEAR_CONFIG.sourceBytesLimit)
+                            ?.let { bytes ->
+                                ArtworkTransportSanitizer.sanitizeEncodedBytes(
+                                    data = bytes,
+                                    config = ArtworkTransportSanitizer.WEAR_CONFIG,
+                                )
+                            }
+                    }?.let { return it }
                 }
-                output.toByteArray().takeIf { it.isNotEmpty() }
+                scheme == "http" || scheme == "https" -> {
+                    downloadAndSanitizeRemoteArtwork(uriString)?.let { return it }
+                }
             }
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed to read artwork bytes from URI: %s", uriString)
-            null
         }
+        return ArtworkTransportSanitizer.sanitizeEncodedBytes(
+            data = playerInfo.albumArtBitmapData,
+            config = ArtworkTransportSanitizer.WEAR_CONFIG,
+        )
     }
 
-    /**
-     * Fallback path when a URI asset can't be transferred as-is (e.g. too large).
-     * Decodes from URI and re-encodes with high quality at bounded dimensions.
-     */
-    private fun renderUriArtworkForWear(uriString: String): ByteArray? {
+    private fun downloadAndSanitizeRemoteArtwork(uriString: String): ByteArray? {
+        var connection: HttpURLConnection? = null
         return try {
-            val uri = Uri.parse(uriString)
-            val bounded = decodeBoundedBitmapFromUri(uri, ART_MAX_DIMENSION) ?: return null
-            val output = ByteArrayOutputStream()
-            bounded.compress(Bitmap.CompressFormat.JPEG, ART_QUALITY, output)
-            bounded.recycle()
-            output.toByteArray().takeIf { it.isNotEmpty() }
-        } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed URI artwork fallback render: %s", uriString)
-            null
-        }
-    }
-
-    /**
-     * Compress album art to a JPEG suitable for full-screen watch display.
-     * Uses bounded downscale to preserve sharpness while keeping payload reasonable.
-     */
-    private fun createAlbumArtAsset(artBitmapData: ByteArray?): Asset? {
-        if (artBitmapData == null || artBitmapData.isEmpty()) return null
-
-        return try {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(artBitmapData, 0, artBitmapData.size, bounds)
-            val srcWidth = bounds.outWidth
-            val srcHeight = bounds.outHeight
-            val srcMax = max(srcWidth, srcHeight)
-            if (
-                srcWidth > 0 &&
-                srcHeight > 0 &&
-                srcMax <= ART_MAX_DIMENSION &&
-                artBitmapData.size <= MAX_DIRECT_ASSET_BYTES
-            ) {
-                // Preserve original bytes when already suitable; avoids second lossy pass.
-                return Asset.createFromBytes(artBitmapData)
-            }
-
-            val scaled = decodeBoundedBitmap(artBitmapData, ART_MAX_DIMENSION)
+            connection = (URL(uriString).openConnection() as? HttpURLConnection)
                 ?: return null
-
-            val stream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, ART_QUALITY, stream)
-            scaled.recycle()
-
-            Asset.createFromBytes(stream.toByteArray())
+            connection.connectTimeout = 4_000
+            connection.readTimeout = 6_000
+            connection.instanceFollowRedirects = true
+            connection.doInput = true
+            connection.inputStream.use { input ->
+                readBytesCapped(input, ArtworkTransportSanitizer.WEAR_CONFIG.sourceBytesLimit)
+                    ?.let { bytes ->
+                        ArtworkTransportSanitizer.sanitizeEncodedBytes(
+                            data = bytes,
+                            config = ArtworkTransportSanitizer.WEAR_CONFIG,
+                        )
+                    }
+            }
         } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed to create album art asset")
+            Timber.tag(TAG).w(e, "Failed to download remote artwork for Wear: %s", uriString)
             null
+        } finally {
+            connection?.disconnect()
         }
     }
 
-    private fun decodeBoundedBitmap(data: ByteArray, maxDimension: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
-        val srcWidth = bounds.outWidth
-        val srcHeight = bounds.outHeight
-        if (srcWidth <= 0 || srcHeight <= 0) return null
-
-        var sampleSize = 1
-        while (
-            (srcWidth / sampleSize) > maxDimension * 2 ||
-            (srcHeight / sampleSize) > maxDimension * 2
-        ) {
-            sampleSize *= 2
+    private fun readBytesCapped(input: java.io.InputStream, maxBytes: Int): ByteArray? {
+        val buffer = ByteArray(16 * 1024)
+        val output = java.io.ByteArrayOutputStream()
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            total += read
+            if (total > maxBytes) {
+                Timber.tag(TAG).d("Artwork source exceeded hard limit (%d bytes)", total)
+                return null
+            }
+            output.write(buffer, 0, read)
         }
-
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inJustDecodeBounds = false
-            inMutable = false
-        }
-        val decoded = BitmapFactory.decodeByteArray(data, 0, data.size, decodeOptions) ?: return null
-
-        val decodedMax = max(decoded.width, decoded.height)
-        if (decodedMax <= maxDimension) {
-            return decoded
-        }
-
-        val scale = maxDimension.toFloat() / decodedMax.toFloat()
-        val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
-        val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
-        val resized = Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
-        if (resized !== decoded) {
-            decoded.recycle()
-        }
-        return resized
-    }
-
-    private fun decodeBoundedBitmapFromUri(uri: Uri, maxDimension: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        AlbumArtUtils.openArtworkInputStream(application, uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, bounds)
-        } ?: return null
-
-        val srcWidth = bounds.outWidth
-        val srcHeight = bounds.outHeight
-        if (srcWidth <= 0 || srcHeight <= 0) return null
-
-        var sampleSize = 1
-        while (
-            (srcWidth / sampleSize) > maxDimension * 2 ||
-            (srcHeight / sampleSize) > maxDimension * 2
-        ) {
-            sampleSize *= 2
-        }
-
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inJustDecodeBounds = false
-            inMutable = false
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-
-        val decoded = AlbumArtUtils.openArtworkInputStream(application, uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, decodeOptions)
-        } ?: return null
-
-        val decodedMax = max(decoded.width, decoded.height)
-        if (decodedMax <= maxDimension) return decoded
-
-        val scale = maxDimension.toFloat() / decodedMax.toFloat()
-        val targetWidth = (decoded.width * scale).roundToInt().coerceAtLeast(1)
-        val targetHeight = (decoded.height * scale).roundToInt().coerceAtLeast(1)
-        val resized = Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
-        if (resized !== decoded) decoded.recycle()
-        return resized
+        return output.toByteArray().takeIf { it.isNotEmpty() }
     }
 
     /**
@@ -388,5 +356,39 @@ class WearStatePublisher @Inject constructor(
         val lightContrast = ColorUtils.calculateContrast(light, opaqueBackground)
         val darkContrast = ColorUtils.calculateContrast(dark, opaqueBackground)
         return if (lightContrast >= darkContrast) light else dark
+    }
+
+    private fun com.theveloper.pixelplay.data.model.Lyrics.toWearLyrics(
+        showTranslation: Boolean = true,
+        showRomanization: Boolean = true,
+    ): WearLyrics? {
+        val syncedLines = synced
+            ?.asSequence()
+            ?.filter { it.line.isNotBlank() || !it.translation.isNullOrBlank() || !it.romanization.isNullOrBlank() }
+            ?.take(MAX_WEAR_LYRIC_LINES)
+            ?.map { line ->
+                WearSyncedLyricLine(
+                    timeMs = line.time,
+                    line = line.line,
+                    translation = if (showTranslation) line.translation else null,
+                    romanization = if (showRomanization) line.romanization else null,
+                )
+            }
+            ?.toList()
+            .orEmpty()
+
+        if (syncedLines.isNotEmpty()) {
+            return WearLyrics(synced = syncedLines)
+        }
+
+        val plainLines = plain
+            ?.asSequence()
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.take(MAX_WEAR_LYRIC_LINES)
+            ?.toList()
+            .orEmpty()
+
+        return WearLyrics(plain = plainLines).takeIf { it.hasLyrics }
     }
 }

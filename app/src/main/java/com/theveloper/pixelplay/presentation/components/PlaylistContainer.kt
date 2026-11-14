@@ -32,7 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Topic
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
@@ -43,7 +42,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -67,8 +65,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -79,14 +77,17 @@ import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Playlist
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.model.SortOption
-import com.theveloper.pixelplay.presentation.components.subcomps.SineWaveLine
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.screens.PlayerSheetCollapsedCornerRadius
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistUiState
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistSelectionStateHolder
+import com.theveloper.pixelplay.utils.formatSongCount
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
-import androidx.compose.foundation.combinedClickable
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -122,43 +123,54 @@ fun PlaylistContainer(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp),
-                contentAlignment = Alignment.TopCenter
+                    .padding(
+                        start = 28.dp,
+                        end = 28.dp,
+                        bottom = bottomBarHeight + MiniPlayerHeight + 24.dp
+                    ),
+                contentAlignment = Alignment.Center
             ) {
                 Column(
-                    modifier = Modifier.padding(top = 28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    SineWaveLine(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(32.dp)
-                            .padding(horizontal = 8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f),
-                        alpha = 0.95f,
-                        strokeWidth = 3.dp,
-                        amplitude = 4.dp,
-                        waves = 7.6f,
-                        phase = 0f
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Icon(
-                        Icons.AutoMirrored.Rounded.PlaylistPlay,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "No playlist has been created.",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Touch the 'New Playlist' button to start.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                        tonalElevation = 2.dp
+                    ) {
+                        Box(
+                            modifier = Modifier.size(56.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.PlaylistPlay,
+                                contentDescription = null,
+                                modifier = Modifier.size(32.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.playlist_container_no_playlist_created),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontFamily = GoogleSansRounded,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = stringResource(R.string.playlist_container_new_playlist_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         } else {
@@ -235,8 +247,20 @@ fun PlaylistItems(
     onPlaylistLongPress: (Playlist) -> Unit = {},
     onPlaylistSelectionToggle: (Playlist) -> Unit = {}
 ) {
-    val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
+    val hasCurrentSong by remember(playerViewModel) {
+        playerViewModel.stablePlayerState
+            .map { it.currentSong != null && it.currentSong != Song.emptySong() }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
     val listState = rememberLazyListState()
+    val playlistFastScrollLabelProvider = remember(filteredPlaylists, currentSortOption) {
+        { index: Int ->
+            playlistFastScrollLabel(
+                playlist = filteredPlaylists.getOrNull(index),
+                sortOption = currentSortOption
+            )
+        }
+    }
     var lastHandledPlaylistSortKey by remember { mutableStateOf(currentSortOption?.storageKey) }
     var pendingPlaylistSortScrollReset by remember { mutableStateOf(false) }
 
@@ -257,7 +281,7 @@ fun PlaylistItems(
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier
-                .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
+                .padding(start = 12.dp, end = if (LocalShowScrollbar.current && (listState.canScrollForward || listState.canScrollBackward)) 22.dp else 12.dp, bottom = 6.dp)
                 .fillMaxSize()
                 .clip(
                     RoundedCornerShape(
@@ -306,7 +330,7 @@ fun PlaylistItems(
             }
         }
         
-        val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong()) 
+        val bottomPadding = if (hasCurrentSong) 
             bottomBarHeight + MiniPlayerHeight + 16.dp 
         else 
             bottomBarHeight + 16.dp
@@ -315,7 +339,8 @@ fun PlaylistItems(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-            listState = listState
+            listState = listState,
+            dragLabelProvider = playlistFastScrollLabelProvider
         )
     }
 }
@@ -334,10 +359,16 @@ fun PlaylistItem(
     onLongPress: () -> Unit = {},
     onPlaylistSelectionToggle: () -> Unit = {}
 ) {
-    val allSongs by playerViewModel.allSongsFlow.collectAsStateWithLifecycle()
-    val playlistSongs = remember(playlist.songIds, allSongs) {
-        allSongs.filter { it.id in playlist.songIds }
+    val playlistPreviewSongIds = remember(playlist.songIds) {
+        playlist.songIds.take(4)
     }
+    val playlistSongsInitialValue = remember(playlistPreviewSongIds) {
+        if (playlistPreviewSongIds.isEmpty()) emptyList<Song>() else null
+    }
+    val playlistSongs by remember(playlistPreviewSongIds, playerViewModel) {
+        playerViewModel.observeSongs(playlistPreviewSongIds)
+            .map<List<Song>, List<Song>?> { it }
+    }.collectAsStateWithLifecycle(initialValue = playlistSongsInitialValue)
 
     val selectionScale by animateFloatAsState(
         targetValue = if (isSelected) 0.98f else 1f,
@@ -405,7 +436,7 @@ fun PlaylistItem(
         ) {
             PlaylistCover(
                 playlist = playlist,
-                playlistSongs = playlistSongs,
+                playlistSongs = playlistSongs ?: emptyList(),
                 size = 48.dp
             )
 
@@ -437,7 +468,7 @@ fun PlaylistItem(
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(
                             painter = painterResource(R.drawable.netease_cloud_music_logo_icon_206716__1_),
-                            contentDescription = "Netease Cloud Music",
+                            contentDescription = "Netease Music",
                             tint = MaterialTheme.colorScheme.tertiary,
                             modifier = Modifier.size(18.dp)
                         )
@@ -480,7 +511,7 @@ fun PlaylistItem(
                     }
                 }
                 Text(
-                    text = "${playlist.songIds.size} Songs",
+                    text = formatSongCount(playlist.songIds.size),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -499,7 +530,7 @@ fun PlaylistItem(
                 ) {
                     if (selectionIndex >= 0) {
                         Text(
-                            text = "${selectionIndex + 1}",
+                            text = (selectionIndex + 1).toString(),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimary
@@ -507,7 +538,7 @@ fun PlaylistItem(
                     } else {
                         Icon(
                             imageVector = Icons.Rounded.CheckCircle,
-                            contentDescription = "Selected",
+                            contentDescription = stringResource(R.string.common_selected),
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(16.dp)
                         )
@@ -550,7 +581,7 @@ fun CreatePlaylistDialogRedesigned(
                     .fillMaxWidth()
             ) {
                 Text(
-                    text = "New playlist",
+                    text = stringResource(R.string.playlist_container_create_playlist_title),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     fontFamily = GoogleSansRounded,
@@ -560,8 +591,8 @@ fun CreatePlaylistDialogRedesigned(
                 OutlinedTextField(
                     value = playlistName,
                     onValueChange = { playlistName = it },
-                    label = { Text("Playlist Name") },
-                    placeholder = { Text("My playlist") },
+                    label = { Text(stringResource(R.string.playlist_container_create_playlist_name_label)) },
+                    placeholder = { Text(stringResource(R.string.playlist_container_create_playlist_name_placeholder)) },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -573,55 +604,29 @@ fun CreatePlaylistDialogRedesigned(
                     )
                 )
 
-                Column(
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilledTonalButton(
-                        onClick = {
-                            onDismiss()
-                            onGenerateClick()
-                        },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                        ),
-                        contentPadding = PaddingValues(vertical = 12.dp)
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(
-                            painter = painterResource(R.drawable.generate_playlist_ai),
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Generate with AI")
+                        Text(stringResource(R.string.common_cancel), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
+                    Button(
+                        onClick = { onCreate(playlistName) },
+                        modifier = Modifier.weight(1f),
+                        enabled = playlistName.isNotEmpty(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
                     ) {
-                        TextButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Text("Cancel", fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Button(
-                            onClick = { onCreate(playlistName) },
-                            enabled = playlistName.isNotEmpty(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            )
-                        ) {
-                            Text("Create", fontWeight = FontWeight.Bold)
-                        }
+                        Text(stringResource(R.string.common_create), fontWeight = FontWeight.Bold)
                     }
                 }
             }

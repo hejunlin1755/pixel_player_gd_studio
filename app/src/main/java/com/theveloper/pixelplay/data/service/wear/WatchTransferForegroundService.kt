@@ -116,12 +116,12 @@ class WatchTransferForegroundService : Service() {
             ?: transfers.maxByOrNull { it.updatedAtMillis }
 
         val title = when {
-            activeTransfers.size > 1 -> "Sending ${activeTransfers.size} songs to watch"
-            activeTransfers.size == 1 -> "Sending to watch"
-            selectedTransfer?.status == WearTransferProgress.STATUS_COMPLETED -> "Transfer complete"
-            selectedTransfer?.status == WearTransferProgress.STATUS_FAILED -> "Transfer failed"
-            selectedTransfer?.status == WearTransferProgress.STATUS_CANCELLED -> "Transfer cancelled"
-            else -> "Preparing watch transfer"
+            activeTransfers.size > 1 -> getString(R.string.watch_transfer_status_sending_n_to_watch, activeTransfers.size)
+            activeTransfers.size == 1 -> getString(R.string.watch_transfer_status_sending_to_watch)
+            selectedTransfer?.status == WearTransferProgress.STATUS_COMPLETED -> getString(R.string.watch_transfer_status_complete_service)
+            selectedTransfer?.status == WearTransferProgress.STATUS_FAILED -> getString(R.string.watch_transfer_status_failed_service)
+            selectedTransfer?.status == WearTransferProgress.STATUS_CANCELLED -> getString(R.string.watch_transfer_status_cancelled_service)
+            else -> getString(R.string.watch_transfer_status_preparing_service)
         }
 
         val contentText = buildContentText(selectedTransfer, activeTransfers.size)
@@ -151,7 +151,7 @@ class WatchTransferForegroundService : Service() {
 
         if (transfers.size > 1) {
             val style = NotificationCompat.InboxStyle()
-                .setSummaryText("${transfers.size} transfers")
+                .setSummaryText(getString(R.string.watch_transfer_summary_n, transfers.size))
             transfers
                 .sortedByDescending { it.updatedAtMillis }
                 .take(MAX_STYLE_LINES)
@@ -173,13 +173,13 @@ class WatchTransferForegroundService : Service() {
         transfer: PhoneWatchTransferState?,
         activeTransferCount: Int,
     ): String {
-        if (transfer == null) return "Starting transfer..."
+        if (transfer == null) return getString(R.string.watch_transfer_status_starting)
 
         if (activeTransferCount > 1) {
-            return transfer.songTitle.ifBlank { "Multiple active transfers" }
+            return transfer.songTitle.ifBlank { getString(R.string.watch_transfer_status_multiple_active) }
         }
 
-        val songTitle = transfer.songTitle.ifBlank { "Preparing transfer..." }
+        val songTitle = transfer.songTitle.ifBlank { getString(R.string.watch_transfer_status_preparing_transfer) }
         val bytesText = formatBytesText(transfer)
         return if (bytesText != null) {
             "$songTitle • $bytesText"
@@ -189,14 +189,14 @@ class WatchTransferForegroundService : Service() {
     }
 
     private fun buildDetailedText(transfer: PhoneWatchTransferState?): String {
-        if (transfer == null) return "Starting transfer..."
+        if (transfer == null) return getString(R.string.watch_transfer_status_starting)
 
         val statusLine = when (transfer.status) {
-            WearTransferProgress.STATUS_TRANSFERRING -> "Transferring"
-            WearTransferProgress.STATUS_COMPLETED -> "Completed"
-            WearTransferProgress.STATUS_FAILED -> "Failed"
-            WearTransferProgress.STATUS_CANCELLED -> "Cancelled"
-            else -> "Preparing"
+            WearTransferProgress.STATUS_TRANSFERRING -> getString(R.string.watch_transfer_status_transferring)
+            WearTransferProgress.STATUS_COMPLETED -> getString(R.string.watch_transfer_status_completed)
+            WearTransferProgress.STATUS_FAILED -> getString(R.string.watch_transfer_status_failed)
+            WearTransferProgress.STATUS_CANCELLED -> getString(R.string.watch_transfer_status_cancelled)
+            else -> getString(R.string.watch_transfer_status_preparing)
         }
         val bytesLine = formatBytesText(transfer)
         val errorLine = transfer.error?.takeIf { it.isNotBlank() }
@@ -214,12 +214,12 @@ class WatchTransferForegroundService : Service() {
         val status = when (transfer.status) {
             WearTransferProgress.STATUS_TRANSFERRING -> {
                 val percent = (transfer.progress * 100f).toInt().coerceIn(0, 100)
-                if (transfer.totalBytes > 0L) "$percent%" else "Starting"
+                if (transfer.totalBytes > 0L) "$percent%" else getString(R.string.watch_transfer_status_starting_short)
             }
-            WearTransferProgress.STATUS_COMPLETED -> "Completed"
-            WearTransferProgress.STATUS_FAILED -> "Failed"
-            WearTransferProgress.STATUS_CANCELLED -> "Cancelled"
-            else -> "Preparing"
+            WearTransferProgress.STATUS_COMPLETED -> getString(R.string.watch_transfer_status_completed)
+            WearTransferProgress.STATUS_FAILED -> getString(R.string.watch_transfer_status_failed)
+            WearTransferProgress.STATUS_CANCELLED -> getString(R.string.watch_transfer_status_cancelled)
+            else -> getString(R.string.watch_transfer_status_preparing)
         }
         return "$title • $status"
     }
@@ -233,6 +233,7 @@ class WatchTransferForegroundService : Service() {
 
     private fun createOpenAppPendingIntent(): PendingIntent {
         val intent = Intent(this, MainActivity::class.java).apply {
+            setPackage(packageName)
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         return PendingIntent.getActivity(
@@ -247,10 +248,10 @@ class WatchTransferForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
-            "Watch Transfers",
+            getString(R.string.watch_transfer_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Shows live progress for phone-to-watch music transfers"
+            description = getString(R.string.watch_transfer_channel_description)
             setShowBadge(false)
         }
         notificationManager().createNotificationChannel(channel)

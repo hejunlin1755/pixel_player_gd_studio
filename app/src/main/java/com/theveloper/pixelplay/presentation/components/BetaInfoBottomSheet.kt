@@ -3,10 +3,12 @@ package com.theveloper.pixelplay.presentation.components
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,28 +17,47 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material.icons.rounded.Highlight
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.Whatshot
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MediumExtendedFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -55,6 +76,27 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
 
     val fabCornerRadius = 18.dp
 
+    val versionName = remember {
+        try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            packageInfo.versionName ?: "0.7.5-beta"
+        } catch (_: Exception) {
+            "0.7.5-beta"
+        }
+    }
+
+    val versionStrTemplate = stringResource(R.string.beta_sheet_version)
+    val welcomeTitleTemplate = stringResource(R.string.beta_sheet_welcome_title)
+
+    val displayVersion = remember(versionName, versionStrTemplate) {
+        val cleanVersion = versionName.substringBefore("-")
+        versionStrTemplate.replace(Regex("""\d+\.\d+\.\d+"""), cleanVersion)
+    }
+
+    val welcomeTitle = remember(versionName, welcomeTitleTemplate) {
+        welcomeTitleTemplate.replace(Regex("""\d+\.\d+\.\d+(?:-beta)?"""), versionName)
+    }
+
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -64,12 +106,12 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
                 .padding(horizontal = 24.dp),
             contentPadding = PaddingValues(top = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item(key = "header") {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Beta 0.6.0",
+                        text = displayVersion,
                         fontFamily = GoogleSansRounded,
                         style = ExpTitleTypography.displaySmall,
                         color = MaterialTheme.colorScheme.onSurface
@@ -104,7 +146,6 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
                         smoothnessAsPercentBL = 60,
                         smoothnessAsPercentBR = 60
                     ),
-                    //tonalElevation = 2.dp,
                     color = MaterialTheme.colorScheme.surfaceContainerHigh
                 ) {
                     Row(
@@ -129,7 +170,7 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "β",
+                                text = stringResource(R.string.beta_sheet_letter),
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Black
@@ -139,12 +180,12 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = "Welcome to PixelPlayer 0.6.0-beta",
+                                text = welcomeTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "This beta is now focused on stability, performance, and cross-device playback while shipping major new integrations.",
+                                text = stringResource(R.string.beta_sheet_welcome_body),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -153,171 +194,236 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
                 }
             }
 
-            item(key = "what-to-expect") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = AbsoluteSmoothCornerShape(
-                        cornerRadiusTR = fabCornerRadius,
-                        cornerRadiusTL = fabCornerRadius,
-                        cornerRadiusBL = fabCornerRadius,
-                        cornerRadiusBR = fabCornerRadius,
-                        smoothnessAsPercentTR = 60,
-                        smoothnessAsPercentTL = 60,
-                        smoothnessAsPercentBL = 60,
-                        smoothnessAsPercentBR = 60
-                    ),
-                    tonalElevation = 2.dp,
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
+            item(key = "github-shortcut") {
+                GitHubReportCard(
+                    onOpenIssues = { launchUrl(context, issuesUrl) },
+                    onReportIssue = { launchUrl(context, reportUrl) }
+                )
+            }
+
+            item(key = "section-expect") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_expect_title),
+                    summary = stringResource(R.string.beta_sheet_expect_summary),
+                    icon = Icons.Rounded.Whatshot,
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    initiallyExpanded = true
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Rounded.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "What to expect",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Text(
-                            text = "Faster daily use: smoother startup, navigation, and player interactions across the app.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    BetaBulletList(
+                        items = listOf(
+                            R.string.beta_sheet_expect_1,
+                            R.string.beta_sheet_expect_2,
+                            R.string.beta_sheet_expect_3,
+                            R.string.beta_sheet_expect_4
                         )
-                        Text(
-                            text = "Broader device support: Android Auto, Wear OS upgrades, and stronger Cast reliability.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Expanded cloud ecosystem: Telegram playlists, NetEase sync, QQ Music, and Google Drive streaming updates.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Large reliability pass: queue/shuffle logic, background playback behavior, and many UI fixes.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    )
                 }
             }
 
-            item(key = "report-issue") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = AbsoluteSmoothCornerShape(
-                        cornerRadiusTR = fabCornerRadius,
-                        cornerRadiusTL = fabCornerRadius,
-                        cornerRadiusBL = fabCornerRadius,
-                        cornerRadiusBR = fabCornerRadius,
-                        smoothnessAsPercentTR = 60,
-                        smoothnessAsPercentTL = 60,
-                        smoothnessAsPercentBL = 60,
-                        smoothnessAsPercentBR = 60
-                    ),
-                    tonalElevation = 2.dp,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest
+            item(key = "section-reporting") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_report_title),
+                    summary = stringResource(R.string.beta_sheet_report_summary),
+                    icon = Icons.Rounded.Search,
+                    iconTint = MaterialTheme.colorScheme.secondary
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Rounded.BugReport,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Report an issue",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Text(
-                            text = "Share steps to reproduce, expected result, actual result, and your device/OS details. A short screen recording is very helpful.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Search,
+                        title = stringResource(R.string.beta_sheet_before_title)
+                    )
+                    BetaBulletList(
+                        items = listOf(
+                            R.string.beta_sheet_before_1,
+                            R.string.beta_sheet_before_2,
+                            R.string.beta_sheet_before_3,
+                            R.string.beta_sheet_before_4
                         )
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                onClick = { launchUrl(context, issuesUrl) },
-                                // Eliminamos height fija y usamos contentPadding
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(vertical = 16.dp),
-                                shape = AbsoluteSmoothCornerShape(
-                                    cornerRadiusTR = fabCornerRadius,
-                                    cornerRadiusTL = fabCornerRadius,
-                                    cornerRadiusBL = fabCornerRadius,
-                                    cornerRadiusBR = fabCornerRadius,
-                                    smoothnessAsPercentTR = 60,
-                                    smoothnessAsPercentTL = 60,
-                                    smoothnessAsPercentBL = 60,
-                                    smoothnessAsPercentBR = 60
-                                ),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.github),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "Open GitHub issues")
-                            }
-                            FilledTonalButton(
-                                onClick = { launchUrl(context, reportUrl) },
-                                // Eliminamos height fija y usamos contentPadding
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(vertical = 16.dp),
-                                shape = AbsoluteSmoothCornerShape(
-                                    cornerRadiusTR = fabCornerRadius,
-                                    cornerRadiusTL = fabCornerRadius,
-                                    cornerRadiusBL = fabCornerRadius,
-                                    cornerRadiusBR = fabCornerRadius,
-                                    smoothnessAsPercentTR = 60,
-                                    smoothnessAsPercentTL = 60,
-                                    smoothnessAsPercentBL = 60,
-                                    smoothnessAsPercentBR = 60
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(text = "Report a bug")
-                            }
-                        }
-                    }
+                    )
+                    BetaSectionDivider()
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.CheckCircle,
+                        title = stringResource(R.string.beta_sheet_issue_type_title)
+                    )
+                    BetaBulletList(
+                        items = listOf(
+                            R.string.beta_sheet_issue_type_bug,
+                            R.string.beta_sheet_issue_type_feature,
+                            R.string.beta_sheet_issue_type_question
+                        )
+                    )
                 }
             }
 
-            item {
-                Spacer(modifier = Modifier.height(38.dp))
+            item(key = "section-bug-report") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_bug_title),
+                    summary = stringResource(R.string.beta_sheet_bug_summary_text),
+                    icon = Icons.Rounded.BugReport,
+                    iconTint = MaterialTheme.colorScheme.error,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                ) {
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.BugReport,
+                        title = stringResource(R.string.beta_sheet_bug_template_title)
+                    )
+                    BetaFieldList(
+                        items = listOf(
+                            R.string.beta_sheet_bug_summary,
+                            R.string.beta_sheet_bug_expected,
+                            R.string.beta_sheet_bug_actual,
+                            R.string.beta_sheet_bug_steps,
+                            R.string.beta_sheet_bug_frequency,
+                            R.string.beta_sheet_bug_screenshot,
+                            R.string.beta_sheet_bug_logs
+                        )
+                    )
+                    BetaSectionDivider()
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Info,
+                        title = stringResource(R.string.beta_sheet_env_title)
+                    )
+                    BetaFieldList(
+                        items = listOf(
+                            R.string.beta_sheet_env_version,
+                            R.string.beta_sheet_env_source,
+                            R.string.beta_sheet_env_android,
+                            R.string.beta_sheet_env_device,
+                            R.string.beta_sheet_env_extra
+                        )
+                    )
+                }
+            }
+
+            item(key = "section-feature") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_feature_title),
+                    summary = stringResource(R.string.beta_sheet_feature_summary),
+                    icon = Icons.Rounded.Highlight,
+                    iconTint = MaterialTheme.colorScheme.primary
+                ) {
+                    BetaFieldList(
+                        items = listOf(
+                            R.string.beta_sheet_feature_problem,
+                            R.string.beta_sheet_feature_solution,
+                            R.string.beta_sheet_feature_alternatives,
+                            R.string.beta_sheet_feature_scope,
+                            R.string.beta_sheet_feature_mockup
+                        )
+                    )
+                }
+            }
+
+            item(key = "section-quality") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_quality_title),
+                    summary = stringResource(R.string.beta_sheet_quality_summary),
+                    icon = Icons.Rounded.Gavel,
+                    iconTint = MaterialTheme.colorScheme.tertiary,
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+                ) {
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Gavel,
+                        title = stringResource(R.string.beta_sheet_title_examples_title)
+                    )
+                    BetaBulletList(
+                        items = listOf(
+                            R.string.beta_sheet_title_example_1,
+                            R.string.beta_sheet_title_example_2,
+                            R.string.beta_sheet_title_example_3
+                        )
+                    )
+                    BetaSectionDivider()
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Warning,
+                        title = stringResource(R.string.beta_sheet_avoid_title),
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    BetaBulletList(
+                        items = listOf(
+                            R.string.beta_sheet_avoid_1,
+                            R.string.beta_sheet_avoid_2,
+                            R.string.beta_sheet_avoid_3
+                        )
+                    )
+                    BetaSectionDivider()
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Shield,
+                        title = stringResource(R.string.beta_sheet_privacy_title)
+                    )
+                    Text(
+                        text = stringResource(R.string.beta_sheet_privacy_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            item(key = "section-nightly") {
+                BetaFaqSection(
+                    title = stringResource(R.string.beta_sheet_nightly_title),
+                    summary = stringResource(R.string.beta_sheet_nightly_summary),
+                    icon = Icons.Rounded.NightsStay,
+                    iconTint = MaterialTheme.colorScheme.secondary,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+                ) {
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.NightsStay,
+                        title = stringResource(R.string.beta_sheet_nightly_title)
+                    )
+                    Text(
+                        text = stringResource(R.string.beta_sheet_nightly_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = stringResource(R.string.beta_sheet_nightly_access),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    BetaSectionDivider()
+                    BetaSubsectionHeader(
+                        icon = Icons.Rounded.Cloud,
+                        title = stringResource(R.string.beta_sheet_nightly_report_title)
+                    )
+                    Text(
+                        text = stringResource(R.string.beta_sheet_nightly_report_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            item(key = "bottom-spacer") {
+                Spacer(modifier = Modifier.height(104.dp))
             }
         }
+        ExtendedFloatingActionButton(
+            onClick = { launchUrl(context, reportUrl) },
+            shape = AbsoluteSmoothCornerShape(
+                cornerRadiusTR = fabCornerRadius,
+                cornerRadiusTL = fabCornerRadius,
+                cornerRadiusBL = fabCornerRadius,
+                cornerRadiusBR = fabCornerRadius,
+                smoothnessAsPercentTR = 60,
+                smoothnessAsPercentTL = 60,
+                smoothnessAsPercentBL = 60,
+                smoothnessAsPercentBR = 60
+            ),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            icon = {
+                Icon(
+                    painter = painterResource(id = R.drawable.github),
+                    contentDescription = null
+                )
+            },
+            text = {
+                Text(text = stringResource(R.string.beta_sheet_report_bug))
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(horizontal = 24.dp, vertical = 24.dp)
+        )
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -337,6 +443,277 @@ fun BetaInfoBottomSheet(modifier: Modifier = Modifier) {
     }
 }
 
+@Composable
+private fun GitHubReportCard(
+    onOpenIssues: () -> Unit,
+    onReportIssue: () -> Unit
+) {
+    BetaCardSurface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .background(MaterialTheme.colorScheme.surface, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.github),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = stringResource(R.string.beta_sheet_github_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Text(
+                        text = stringResource(R.string.beta_sheet_github_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.82f)
+                    )
+                }
+            }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onOpenIssues,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = AbsoluteSmoothCornerShape(
+                        cornerRadiusTR = 14.dp,
+                        cornerRadiusTL = 14.dp,
+                        cornerRadiusBL = 14.dp,
+                        cornerRadiusBR = 14.dp,
+                        smoothnessAsPercentTR = 60,
+                        smoothnessAsPercentTL = 60,
+                        smoothnessAsPercentBL = 60,
+                        smoothnessAsPercentBR = 60
+                    ),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    )
+                ) {
+                    Text(text = stringResource(R.string.beta_sheet_open_issues))
+                }
+                Button(
+                    onClick = onReportIssue,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = AbsoluteSmoothCornerShape(
+                        cornerRadiusTR = 14.dp,
+                        cornerRadiusTL = 14.dp,
+                        cornerRadiusBL = 14.dp,
+                        cornerRadiusBR = 14.dp,
+                        smoothnessAsPercentTR = 60,
+                        smoothnessAsPercentTL = 60,
+                        smoothnessAsPercentBL = 60,
+                        smoothnessAsPercentBR = 60
+                    )
+                ) {
+                    Text(text = stringResource(R.string.beta_sheet_report_bug))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BetaFaqSection(
+    title: String,
+    summary: String,
+    icon: ImageVector,
+    iconTint: Color,
+    modifier: Modifier = Modifier,
+    initiallyExpanded: Boolean = false,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+
+    BetaCardSurface(
+        modifier = modifier,
+        color = containerColor,
+        onClick = { expanded = !expanded }
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(iconTint.copy(alpha = 0.16f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    content = content
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BetaCardSurface(
+    modifier: Modifier = Modifier,
+    color: Color,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit
+) {
+    val shape = AbsoluteSmoothCornerShape(
+        cornerRadiusTR = 18.dp,
+        cornerRadiusTL = 18.dp,
+        cornerRadiusBL = 18.dp,
+        cornerRadiusBR = 18.dp,
+        smoothnessAsPercentTR = 60,
+        smoothnessAsPercentTL = 60,
+        smoothnessAsPercentBL = 60,
+        smoothnessAsPercentBR = 60
+    )
+
+    if (onClick == null) {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = color,
+            content = content
+        )
+    } else {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = color,
+            onClick = onClick,
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun BetaSubsectionHeader(
+    icon: ImageVector,
+    title: String,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun BetaBulletList(items: List<Int>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEach { item ->
+            BetaBulletText(text = stringResource(item))
+        }
+    }
+}
+
+@Composable
+private fun BetaFieldList(items: List<Int>) {
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        items.forEachIndexed { index, item ->
+            if (index > 0) {
+                BetaSectionDivider()
+            }
+            Text(
+                text = stringResource(item),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun BetaBulletText(text: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .size(5.dp)
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun BetaSectionDivider() {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+}
+
 private fun launchUrl(context: Context, url: String) {
     val intent = Intent(Intent.ACTION_VIEW, url.toUri()).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -344,6 +721,5 @@ private fun launchUrl(context: Context, url: String) {
     try {
         context.startActivity(intent)
     } catch (_: ActivityNotFoundException) {
-        // Swallow the error; caller does not need to handle it here.
     }
 }

@@ -28,6 +28,23 @@ interface MusicRepository {
     fun getPaginatedSongs(sortOption: com.theveloper.pixelplay.data.model.SortOption, storageFilter: com.theveloper.pixelplay.data.model.StorageFilter): Flow<PagingData<Song>>
 
     /**
+     * Returns paginated albums for efficient display in library tabs.
+     */
+    fun getPaginatedAlbums(
+        sortOption: com.theveloper.pixelplay.data.model.SortOption,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL,
+        minTracks: Int = 1
+    ): Flow<PagingData<Album>>
+
+    /**
+     * Returns paginated artists for efficient display in library tabs.
+     */
+    fun getPaginatedArtists(
+        sortOption: com.theveloper.pixelplay.data.model.SortOption,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): Flow<PagingData<Artist>>
+
+    /**
      * Returns paginated favorite songs for efficient display.
      * @return Flow of PagingData<Song> for use with LazyPagingItems.
      */
@@ -40,6 +57,16 @@ interface MusicRepository {
      * Returns all favorite songs as a list (for playback queue on shuffle).
      */
     suspend fun getFavoriteSongsOnce(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): List<Song>
+
+    /**
+     * Returns a bounded favorites page without materializing the full favorites list.
+     */
+    suspend fun getFavoriteSongsPage(
+        limit: Int,
+        offset: Int,
+        sortOption: com.theveloper.pixelplay.data.model.SortOption = com.theveloper.pixelplay.data.model.SortOption.LikedSongTitleAZ,
         storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
     ): List<Song>
 
@@ -57,6 +84,11 @@ interface MusicRepository {
     fun getSongCountFlow(): Flow<Int>
 
     /**
+     * Returns the count of cloud songs in the library.
+     */
+    fun getCloudSongCountFlow(): Flow<Int>
+
+    /**
      * Returns a random selection of songs for efficient shuffle.
      * Uses database-level RANDOM() for performance.
      * @param limit Maximum number of songs to return.
@@ -65,10 +97,50 @@ interface MusicRepository {
     suspend fun getRandomSongs(limit: Int): List<Song>
 
     /**
+     * Returns a bounded song page without materializing the full library.
+     */
+    suspend fun getSongsPage(
+        limit: Int,
+        offset: Int,
+        sortOption: com.theveloper.pixelplay.data.model.SortOption = com.theveloper.pixelplay.data.model.SortOption.SongDefaultOrder,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): List<Song>
+
+    /**
+     * Returns a bounded album page without materializing the full albums list.
+     */
+    suspend fun getAlbumsPage(
+        limit: Int,
+        offset: Int,
+        sortOption: com.theveloper.pixelplay.data.model.SortOption = com.theveloper.pixelplay.data.model.SortOption.AlbumTitleAZ,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL,
+        minTracks: Int = 1
+    ): List<Album>
+
+    /**
+     * Returns a bounded artist page without materializing the full artists list.
+     */
+    suspend fun getArtistsPage(
+        limit: Int,
+        offset: Int,
+        sortOption: com.theveloper.pixelplay.data.model.SortOption = com.theveloper.pixelplay.data.model.SortOption.ArtistNameAZ,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): List<Artist>
+
+    /**
+     * Returns a single playable song without materializing the entire library.
+     * Useful for startup and fallback playback paths.
+     */
+    suspend fun getFirstPlayableSong(): Song?
+
+    /**
      * Obtiene la lista de álbumes filtrada.
      * @return Flow que emite una lista completa de objetos Album.
      */
-    fun getAlbums(storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL): Flow<List<Album>> // Existing Flow for reactive updates
+    fun getAlbums(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL,
+        minTracks: Int = 1
+    ): Flow<List<Album>> // Existing Flow for reactive updates
 
     /**
      * Obtiene la lista de artistas filtrada.
@@ -85,10 +157,24 @@ interface MusicRepository {
     suspend fun getAllSongsOnce(): List<Song>
 
     /**
+     * Returns one representative song per unique album art URI for maintenance tools that
+     * operate on artwork-derived palettes.
+     */
+    fun getDistinctAlbumArtSongs(): Flow<List<Song>>
+
+    /**
+     * Returns a bounded preview sample for Home without materializing the full library in UI.
+     */
+    fun getHomeMixPreviewSongs(limit: Int): Flow<List<Song>>
+
+    /**
      * Obtiene la lista completa de álbumes una sola vez.
      * @return Lista de objetos Album.
      */
-    suspend fun getAllAlbumsOnce(): List<Album>
+    suspend fun getAllAlbumsOnce(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL,
+        minTracks: Int = 1
+    ): List<Album>
 
     /**
      * Obtiene la lista completa de artistas una sola vez.
@@ -149,8 +235,8 @@ interface MusicRepository {
 
     suspend fun invalidateCachesDependentOnAllowedDirectories() // Nuevo para precarga de temas
 
-    fun searchSongs(query: String): Flow<List<Song>>
-    fun searchAlbums(query: String): Flow<List<Album>>
+    fun searchSongs(query: String, titleOnly: Boolean = false): Flow<List<Song>>
+    fun searchAlbums(query: String, minTracks: Int = 1): Flow<List<Album>>
     fun searchArtists(query: String): Flow<List<Artist>>
     suspend fun searchPlaylists(query: String): List<Playlist> // Mantener suspend, ya que no hay Flow aún
     fun searchAll(query: String, filterType: SearchFilterType): Flow<List<SearchResultItem>>
@@ -199,6 +285,7 @@ interface MusicRepository {
      */
     fun getSong(songId: String): Flow<Song?>
     fun getArtistById(artistId: Long): Flow<Artist?>
+    suspend fun getArtistIdByName(name: String): Long?
     fun getArtistsForSong(songId: Long): Flow<List<Artist>>
 
     /**
@@ -212,6 +299,8 @@ interface MusicRepository {
         sourcePreference: LyricsSourcePreference = LyricsSourcePreference.EMBEDDED_FIRST,
         forceRefresh: Boolean = false
     ): Lyrics?
+
+    suspend fun getStoredLyrics(song: Song): Pair<Lyrics, String>?
 
     suspend fun getLyricsFromRemote(song: Song): Result<Pair<Lyrics, String>>
 
@@ -253,6 +342,7 @@ interface MusicRepository {
     /** Replaces the full topic list for a channel, deleting any topics that no longer exist. */
     suspend fun replaceTopicsForChannel(chatId: Long, freshTopics: List<com.theveloper.pixelplay.data.database.TelegramTopicEntity>)
     suspend fun getTopicsForChannel(chatId: Long): List<com.theveloper.pixelplay.data.database.TelegramTopicEntity>
+    fun getAllTelegramTopics(): Flow<List<com.theveloper.pixelplay.data.database.TelegramTopicEntity>>
     suspend fun replaceTelegramSongsForTopic(chatId: Long, threadId: Long, topicName: String, songs: List<Song>)
 
     val telegramRepository: com.theveloper.pixelplay.data.telegram.TelegramRepository
@@ -266,4 +356,20 @@ interface MusicRepository {
         sortOption: com.theveloper.pixelplay.data.model.SortOption,
         storageFilter: com.theveloper.pixelplay.data.model.StorageFilter
     ): List<Long>
+
+    /**
+     * Resolves the unified-table song id for a content URI. Returns null if no
+     * matching row exists. Used by locate-current-song to recover from playback
+     * sessions where `Song.id` is a non-numeric source-specific string.
+     */
+    suspend fun getSongIdByContentUri(contentUri: String): Long?
+
+    /**
+     * Enqueues an incremental SyncWorker run with [androidx.work.ExistingWorkPolicy.KEEP].
+     * Use from finally blocks of Telegram ingestion flows to guarantee the unified-table
+     * sync happens even when an exception bypasses the normal end-of-flow
+     * [saveTelegramChannel] call. KEEP avoids cancelling a full/rebuild that may be
+     * in progress under the same unique work name.
+     */
+    fun requestTelegramUnifiedSync()
 }

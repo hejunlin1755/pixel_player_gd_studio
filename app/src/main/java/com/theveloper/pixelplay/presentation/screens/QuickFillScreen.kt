@@ -41,6 +41,8 @@ import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.utils.GenreIconProvider
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 
 @Composable
 fun QuickFillDialog(
@@ -93,7 +95,8 @@ fun QuickFillContent(
                 title = {
                     AnimatedContent(targetState = step, label = "Title") { s ->
                         Text(
-                            if (s == 0) "Select Songs" else "Choose Genre",
+                            if (s == 0) stringResource(R.string.quick_fill_select_songs)
+                            else stringResource(R.string.quick_fill_choose_genre),
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = GoogleSansRounded,
@@ -112,7 +115,7 @@ fun QuickFillContent(
                     ) {
                         Icon(
                             if (step > 0) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Close,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.common_back)
                         )
                     }
                 },
@@ -140,7 +143,7 @@ fun QuickFillContent(
                                modifier = Modifier
                                    .fillMaxWidth()
                                    .padding(16.dp),
-                               label = { Text("Search songs") },
+                               label = { Text(stringResource(R.string.quick_fill_search_songs_placeholder)) },
                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                                trailingIcon = if (searchQuery.isNotEmpty()) {
                                    { IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Rounded.Clear, null) } }
@@ -219,7 +222,7 @@ fun QuickFillContent(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                             modifier = Modifier.fillMaxHeight()
                         ) {
-                            Text("Select All", style = MaterialTheme.typography.labelLarge)
+                            Text(stringResource(R.string.common_select_all), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         
                         // Divider/Spacer
@@ -235,14 +238,21 @@ fun QuickFillContent(
                             contentPadding = PaddingValues(horizontal = 16.dp),
                             modifier = Modifier.fillMaxHeight()
                         ) {
-                            Text("Clear", style = MaterialTheme.typography.labelLarge)
+                            Text(stringResource(R.string.common_clear), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     Spacer(modifier = Modifier.weight(1f))
                 } else {
                     Spacer(modifier = Modifier.width(16.dp))
                     Text(
-                        text = if (selectedGenre != null) "Genre: $selectedGenre" else "Select a genre",
+                        text = run {
+                            val genre = selectedGenre
+                            if (genre != null) {
+                                stringResource(R.string.quick_fill_select_genre_label_format, genre)
+                            } else {
+                                stringResource(R.string.quik_fill_select_a_genre_label)
+                            }
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -274,7 +284,8 @@ fun QuickFillContent(
                         .height(44.dp) // Removed padding(end=8.dp) for symmetry
                 ) {
                     Text(
-                        text = if (step == 0) "Next" else "Quick Fill",
+                        text = if (step == 0) stringResource(R.string.common_next)
+                        else stringResource(R.string.quick_fill_action_title),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -300,7 +311,13 @@ fun GenreValidatorContent(
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     var showCustomDialog by remember { mutableStateOf(false) }
-    
+    val addCustomCd = stringResource(R.string.quick_fill_cd_add_custom_genre)
+    val newGenreLabel = stringResource(R.string.quick_fill_new_genre)
+    val addCustomGenreTitle = stringResource(R.string.quick_fill_add_custom_genre_title)
+    val genreNameLabel = stringResource(R.string.quick_fill_genre_name_placeholder)
+    val selectIconLabel = stringResource(R.string.quick_fill_select_icon)
+    val addLabel = stringResource(R.string.common_add)
+
     // Merge standard genres and custom genres
     val allGenres = remember(customGenres) {
         (GenreIconProvider.DEFAULT_GENRES + customGenres.toList()).sorted()
@@ -330,8 +347,8 @@ fun GenreValidatorContent(
             ) {
                  Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                      Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                         Icon(Icons.Rounded.Add, "Add Custom", tint = MaterialTheme.colorScheme.primary)
-                         Text("New Genre", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                         Icon(Icons.Rounded.Add, addCustomCd, tint = MaterialTheme.colorScheme.primary)
+                         Text(newGenreLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                      }
                  }
             }
@@ -387,19 +404,19 @@ fun GenreValidatorContent(
         
         AlertDialog(
             onDismissRequest = { showCustomDialog = false },
-            title = { Text("Add Custom Genre") },
+            title = { Text(addCustomGenreTitle) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = newGenreName,
                         onValueChange = { newGenreName = it },
-                        label = { Text("Genre Name") },
+                        label = { Text(genreNameLabel) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        "Select Icon", 
+                        selectIconLabel,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
@@ -441,10 +458,10 @@ fun GenreValidatorContent(
                             showCustomDialog = false
                         }
                     }
-                ) { Text("Add") }
+                ) { Text(addLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             },
             dismissButton = {
-                TextButton(onClick = { showCustomDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showCustomDialog = false }) { Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         )
     }

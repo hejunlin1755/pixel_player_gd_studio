@@ -14,11 +14,14 @@ import com.theveloper.pixelplay.data.repository.ArtistImageRepository
 import com.theveloper.pixelplay.data.repository.MusicRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -72,21 +75,27 @@ class ArtistDetailViewModel @Inject constructor(
     val artistColorScheme: StateFlow<ColorSchemePair?> = _artistColorScheme.asStateFlow()
 
     init {
-        val artistIdString: String? = savedStateHandle.get("artistId")
-        if (artistIdString != null) {
-            val artistId = artistIdString.toLongOrNull()
-            if (artistId != null) {
-                loadArtistData(artistId)
-            } else {
-                _uiState.update { it.copy(error = context.getString(R.string.invalid_artist_id), isLoading = false) }
+        savedStateHandle.getStateFlow<String?>("artistId", null)
+            .onEach { idString ->
+                if (idString != null) {
+                    val artistId = idString.toLongOrNull()
+                    if (artistId != null) {
+                        loadArtistData(artistId)
+                    } else {
+                        _uiState.update { it.copy(error = context.getString(R.string.artist_detail_invalid_id), isLoading = false) }
+                    }
+                } else {
+                    _uiState.update { it.copy(error = context.getString(R.string.artist_detail_id_not_found), isLoading = false) }
+                }
             }
-        } else {
-            _uiState.update { it.copy(error = context.getString(R.string.artist_id_not_found), isLoading = false) }
-        }
+            .launchIn(viewModelScope)
     }
 
+    private var currentLoadJob: Job? = null
+
     private fun loadArtistData(id: Long) {
-        viewModelScope.launch {
+        currentLoadJob?.cancel()
+        currentLoadJob = viewModelScope.launch {
             Log.d("ArtistDebug", "loadArtistData: id=$id")
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
@@ -100,7 +109,7 @@ class ArtistDetailViewModel @Inject constructor(
                     .catch { e ->
                         _uiState.update {
                             it.copy(
-                                error = context.getString(R.string.error_loading_artist, e.localizedMessage ?: ""),
+                                error = context.getString(R.string.artist_error_loading_artist, e.localizedMessage ?: ""),
                                 isLoading = false
                             )
                         }
@@ -108,7 +117,7 @@ class ArtistDetailViewModel @Inject constructor(
                     .collect { (artist, songs) ->
                         if (artist == null) {
                             _uiState.update {
-                                it.copy(error = context.getString(R.string.could_not_find_artist), isLoading = false)
+                                it.copy(error = context.getString(R.string.artist_detail_not_found), isLoading = false)
                             }
                             return@collect
                         }
@@ -157,7 +166,7 @@ class ArtistDetailViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
-                        error = context.getString(R.string.error_loading_artist, e.localizedMessage ?: ""),
+                        error = context.getString(R.string.artist_error_loading_artist, e.localizedMessage ?: ""),
                         isLoading = false
                     )
                 }
@@ -191,8 +200,10 @@ class ArtistDetailViewModel @Inject constructor(
 
                     _artistColorScheme.value = newScheme
                     _uiState.update { state ->
+                        // Cache-busting: add timestamp to internalPath to force Coil to reload
+                        val effectiveUrlWithBust = "$internalPath?t=${System.currentTimeMillis()}"
                         state.copy(
-                            effectiveImageUrl = internalPath,
+                            effectiveImageUrl = effectiveUrlWithBust,
                             artist = state.artist?.copy(customImageUri = internalPath)
                         )
                     }
@@ -260,7 +271,7 @@ class ArtistDetailViewModel @Inject constructor(
     }
 }
 
-private val songDisplayComparator = compareBy<Song> { it.discNumber }
+private val songDisplayComparator = compareBy<Song> { it.discNumber ?: 1 }
     .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
     .thenBy { it.title.lowercase() }
 

@@ -3,10 +3,15 @@ package com.theveloper.pixelplay.utils
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER
+import androidx.media3.common.util.UnstableApi
+import com.theveloper.pixelplay.data.provider.SharedArtworkContentProvider
 import com.theveloper.pixelplay.data.model.Song
 import java.io.File
 
@@ -23,6 +28,15 @@ object MediaItemBuilder {
         "audio/3gp",
         "audio/3gpp",
         "audio/3gpp2",
+        "audio/amr",
+        "audio/amr-wb",
+        "audio/evrc",
+        "audio/qcelp",
+        "audio/x-ima-adpcm",
+        "audio/x-ms-wma",
+        "audio/x-aiff",
+        "audio/ac3",
+        "audio/vnd.dts",
     )
     private val DIRECT_FILE_URI_EXTENSIONS = setOf(
         "m4a",
@@ -34,8 +48,35 @@ object MediaItemBuilder {
         "3gp",
         "3gpp",
         "alac",
+        "amr",
+        "awb",
+        "evrc",
+        "qcp",
+        "ima",
+        "wma",
+        "aif",
+        "aiff",
+        "ac3",
+        "dts",
     )
-    private val SUPPORTED_ARTWORK_SCHEMES = setOf(
+    private val EXTRACTOR_FIRST_MIME_TYPES = setOf(
+        "audio/mp4",
+        "audio/m4a",
+        "audio/x-m4a",
+        "audio/mp4a-latm",
+        "audio/alac",
+        "audio/x-alac",
+        "audio/x-aiff",
+    )
+    private val SUPPORTED_INTERNAL_ARTWORK_SCHEMES = setOf(
+        LocalArtworkUri.SCHEME,
+        "content",
+        "file",
+        "android.resource",
+        "http",
+        "https",
+    )
+    private val SUPPORTED_EXTERNAL_ARTWORK_SCHEMES = setOf(
         "content",
         "file",
         "android.resource",
@@ -55,28 +96,35 @@ object MediaItemBuilder {
     const val EXTERNAL_EXTRA_BITRATE = EXTERNAL_EXTRA_PREFIX + "BITRATE"
     const val EXTERNAL_EXTRA_SAMPLE_RATE = EXTERNAL_EXTRA_PREFIX + "SAMPLE_RATE"
     const val EXTERNAL_EXTRA_FILE_PATH = EXTERNAL_EXTRA_PREFIX + "FILE_PATH"
+    const val EXTERNAL_EXTRA_NAVIDROME_ID = EXTERNAL_EXTRA_PREFIX + "NAVIDROME_ID"
 
     fun build(song: Song): MediaItem {
         return MediaItem.Builder()
             .setMediaId(song.id)
             .setUri(playbackUri(song))
-            .setMimeType(song.mimeType)
+            .setMimeType(playbackMimeType(song))
             .setMediaMetadata(buildMediaMetadataForSong(song))
             .build()
     }
 
     fun buildForExternalController(context: Context, song: Song): MediaItem {
-        return MediaItem.Builder()
-            .setMediaId(song.id)
-            .setUri(playbackUri(song))
-            .setMimeType(song.mimeType)
-            .setMediaMetadata(
-                buildMediaMetadataForSong(
-                    song = song,
-                    exposedArtworkUri = externalControllerArtworkUri(context, song.albumArtUriString)
+        // This is the MediaSession item path for Android Auto / other external controllers;
+        // time it so the performance report can attribute browse/queue lag here.
+        return com.theveloper.pixelplay.data.diagnostics.PerformanceMetrics.time(
+            com.theveloper.pixelplay.data.diagnostics.PerformanceMetrics.Timings.MEDIASESSION_ITEM_BUILD
+        ) {
+            MediaItem.Builder()
+                .setMediaId(song.id)
+                .setUri(playbackUri(song))
+                .setMimeType(playbackMimeType(song))
+                .setMediaMetadata(
+                    buildMediaMetadataForSong(
+                        song = song,
+                        exposedArtworkUri = externalControllerArtworkUri(context, song.albumArtUriString)
+                    )
                 )
-            )
-            .build()
+                .build()
+        }
     }
 
     fun playbackUri(song: Song): Uri {
@@ -93,6 +141,12 @@ object MediaItemBuilder {
         )
     }
 
+    internal fun playbackMimeType(song: Song): String? = playbackMimeType(
+        contentUriString = song.contentUriString,
+        filePath = song.path,
+        mimeType = song.mimeType
+    )
+
     fun playbackUri(
         contentUriString: String,
         filePath: String? = null,
@@ -107,6 +161,37 @@ object MediaItemBuilder {
             Uri.fromFile(File(contentUriString))
         } else {
             uri
+        }
+    }
+
+    internal fun playbackMimeType(
+        contentUriString: String,
+        filePath: String?,
+        mimeType: String?
+    ): String? {
+        val normalizedMimeType = mimeType?.trim()?.lowercase()
+        if (normalizedMimeType.isNullOrBlank()) {
+            return null
+        }
+
+        val isLikelyLocalMedia = LocalArtworkUri.isLikelyLocalMedia(contentUriString) ||
+            filePath?.startsWith("/") == true
+        if (!isLikelyLocalMedia) {
+            return mimeType
+        }
+
+        val extension = filePath
+            ?.substringAfterLast('.', "")
+            ?.lowercase()
+            .orEmpty()
+
+        return if (
+            normalizedMimeType in EXTRACTOR_FIRST_MIME_TYPES ||
+            extension in DIRECT_FILE_URI_EXTENSIONS
+        ) {
+            null
+        } else {
+            mimeType
         }
     }
 
@@ -158,25 +243,29 @@ object MediaItemBuilder {
      * Keep only schemes that these surfaces can usually resolve, and normalize raw paths.
      */
     fun artworkUri(rawArtworkUri: String?): Uri? {
-        if (rawArtworkUri.isNullOrBlank()) {
-            return null
-        }
-
-        if (rawArtworkUri.startsWith("/")) {
-            return Uri.fromFile(File(rawArtworkUri))
-        }
-
-        val uri = rawArtworkUri.toUri()
-        val scheme = uri.scheme?.lowercase()
-        return if (scheme != null && scheme in SUPPORTED_ARTWORK_SCHEMES) {
-            uri
-        } else {
-            null
-        }
+        return normalizeArtworkUri(rawArtworkUri, SUPPORTED_INTERNAL_ARTWORK_SCHEMES)
     }
 
     fun externalControllerArtworkUri(context: Context, rawArtworkUri: String?): Uri? {
-        val normalizedUri = artworkUri(rawArtworkUri) ?: return null
+        if (LocalArtworkUri.isLocalArtworkUri(rawArtworkUri)) {
+            val songId = rawArtworkUri?.let(LocalArtworkUri::parseSongId) ?: return null
+            return SharedArtworkContentProvider.buildSongUri(
+                context = context.applicationContext,
+                songId = songId,
+                cacheBustToken = LocalArtworkUri.extractCacheBustToken(rawArtworkUri)
+            )
+        }
+
+        LocalArtworkUri.parseSongIdFromVolatileArtworkUri(rawArtworkUri)?.let { songId ->
+            return SharedArtworkContentProvider.buildSongUri(
+                context = context.applicationContext,
+                songId = songId,
+                cacheBustToken = LocalArtworkUri.extractCacheBustToken(rawArtworkUri)
+            )
+        }
+
+        val normalizedUri = normalizeArtworkUri(rawArtworkUri, SUPPORTED_EXTERNAL_ARTWORK_SCHEMES)
+            ?: return null
         return when (normalizedUri.scheme?.lowercase()) {
             "file" -> normalizedUri.path
                 ?.takeIf { it.isNotBlank() }
@@ -188,6 +277,7 @@ object MediaItemBuilder {
         }
     }
 
+    @OptIn(UnstableApi::class)
     private fun buildMediaMetadataForSong(
         song: Song,
         exposedArtworkUri: Uri? = artworkUri(song.albumArtUriString)
@@ -217,10 +307,40 @@ object MediaItemBuilder {
             putInt(EXTERNAL_EXTRA_BITRATE, song.bitrate ?: 0)
             putInt(EXTERNAL_EXTRA_SAMPLE_RATE, song.sampleRate ?: 0)
             putString(EXTERNAL_EXTRA_FILE_PATH, song.path)
+            song.navidromeId?.let { putString(EXTERNAL_EXTRA_NAVIDROME_ID, it) }
         }
 
         metadataBuilder.setExtras(extras)
         return metadataBuilder.build()
+    }
+
+    private fun normalizeArtworkUri(
+        rawArtworkUri: String?,
+        supportedSchemes: Set<String>
+    ): Uri? {
+        if (rawArtworkUri.isNullOrBlank()) {
+            return null
+        }
+
+        if (LocalArtworkUri.isLocalArtworkUri(rawArtworkUri)) {
+            return if (LocalArtworkUri.SCHEME in supportedSchemes) {
+                Uri.parse(rawArtworkUri)
+            } else {
+                null
+            }
+        }
+
+        if (rawArtworkUri.startsWith("/")) {
+            return Uri.fromFile(File(rawArtworkUri))
+        }
+
+        val uri = rawArtworkUri.toUri()
+        val scheme = uri.scheme?.lowercase()
+        return if (scheme != null && scheme in supportedSchemes) {
+            uri
+        } else {
+            null
+        }
     }
 
     private fun providerBackedArtworkUri(context: Context, file: File): Uri? {

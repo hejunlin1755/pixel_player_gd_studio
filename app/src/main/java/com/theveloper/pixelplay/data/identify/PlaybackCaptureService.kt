@@ -45,6 +45,11 @@ class PlaybackCaptureService : android.app.Service() {
         }
         val mediaProjection = (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
             .getMediaProjection(resultCode, consent)
+        if (mediaProjection == null) {
+            bus.complete(session, Result.failure(IllegalStateException("没有拿到录屏许可")))
+            stopSelf()
+            return START_NOT_STICKY
+        }
         projection = mediaProjection
         mediaProjection.registerCallback(object : MediaProjection.Callback() {}, Handler(Looper.getMainLooper()))
         Thread {

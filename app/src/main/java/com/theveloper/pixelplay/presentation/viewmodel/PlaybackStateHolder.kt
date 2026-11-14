@@ -1,5 +1,7 @@
 package com.theveloper.pixelplay.presentation.viewmodel
 
+import android.content.Context
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.media3.session.MediaController
 import androidx.media3.common.Player
@@ -7,20 +9,25 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import com.theveloper.pixelplay.data.service.player.DualPlayerEngine
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.service.cast.CastRemotePlaybackState
 import com.google.android.gms.cast.MediaStatus
 import timber.log.Timber
 import com.theveloper.pixelplay.utils.QueueUtils
@@ -33,12 +40,28 @@ class PlaybackStateHolder @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val castStateHolder: CastStateHolder,
     private val queueStateHolder: QueueStateHolder,
-    private val listeningStatsTracker: ListeningStatsTracker
+    @param:ApplicationContext private val appContext: Context
 ) {
     companion object {
         private const val TAG = "PlaybackStateHolder"
         private const val DURATION_MISMATCH_TOLERANCE_MS = 1500L
-        private const val PROGRESS_TICK_MS = 250L
+        // Cap how long we trust a pending seek override against an out-of-date player position.
+        // The override exists to mask the few ticks between seekTo() and the player actually
+        // reporting the new position. If we never see drift converge within this window we
+        // assume the seek will not land and fall back to the reported position rather than
+        // pinning the UI on a stale value forever.
+        private const val PAUSED_OVERRIDE_MAX_AGE_MS = 4_000L
+        // Tick rates:
+        //  - SLIDER_TICK_MS (250): keeps the player sheet's slider/time display visibly smooth.
+        //    We tried 500 ms once to lower Compose recomposition pressure, but the smooth-progress
+        //    sampler polls instead of interpolating, so a 500 ms source made the slider stutter
+        //    in half-second jumps. Used only when the player sheet is open (slider visible).
+        //  - MINIPLAYER_TICK_MS (1000): mini-player + lock screen / notification only need
+        //    second-level precision. Drops position-polling-driven CPU wakes 4x → 1x per second.
+        //  - BACKGROUND_TICK_MS (1000): screen off, no slider visible.
+        private const val SLIDER_TICK_MS = 250L
+        private const val MINIPLAYER_TICK_MS = 1000L
+        private const val BACKGROUND_TICK_MS = 1000L
         /**
          * Threshold above which we skip per-item moveMediaItem calls and use
          * a single setMediaItems call instead. moveMediaItem triggers an IPC
@@ -46,19 +69,30 @@ class PlaybackStateHolder @Inject constructor(
          */
         private const val BULK_REPLACE_THRESHOLD = 80
         private const val SHUFFLE_TOGGLE_COOLDOWN_MS = 400L
+        private const val CAST_SEEK_BLOCKED_TOAST_COOLDOWN_MS = 2500L
     }
 
     private var scope: CoroutineScope? = null
+    private var onCastSeekBlocked: (() -> Unit)? = null
     
     // MediaController
     var mediaController: MediaController? = null
         private set
+    private val mediaControllerStack = mutableListOf<MediaController>()
 
     // Player State
     private val _stablePlayerState = MutableStateFlow(StablePlayerState())
     val stablePlayerState: StateFlow<StablePlayerState> = _stablePlayerState.asStateFlow()
     private val _currentPosition = MutableStateFlow(0L)
     val currentPosition: StateFlow<Long> = _currentPosition.asStateFlow()
+
+    // True while the full player sheet (slider visible) is mounted. Set by the
+    // sheet via DisposableEffect. Controls whether the position ticker runs at
+    // slider-smooth resolution (250 ms) or mini-player resolution (1 s).
+    private val _sliderUiMounted = MutableStateFlow(false)
+    fun setSliderUiMounted(mounted: Boolean) {
+        _sliderUiMounted.value = mounted
+    }
 
     // Internal State
     private var isSeeking = false
@@ -69,11 +103,16 @@ class PlaybackStateHolder @Inject constructor(
     private var pausedPositionOverrideMediaId: String? = null
     private var pausedPositionOverrideToken: Long? = null
     private var pausedPositionOverrideMs: Long? = null
+    private var pausedPositionOverrideSetAtMs: Long = 0L
     private var coldStartSnapshotMediaId: String? = null
     private var coldStartSnapshotToken: Long? = null
     private var coldStartSnapshotPositionMs: Long? = null
     private var shuffleToggleJob: Job? = null
     private var lastShuffleToggleFinishedAtMs: Long = 0L
+    private var lastCastSeekBlockedToastAtMs: Long = 0L
+    private val powerManager: PowerManager by lazy(LazyThreadSafetyMode.NONE) {
+        appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    }
 
     private fun clearColdStartSnapshot() {
         coldStartSnapshotMediaId = null
@@ -110,8 +149,12 @@ class PlaybackStateHolder @Inject constructor(
         return false
     }
 
-    fun initialize(coroutineScope: CoroutineScope) {
+    fun initialize(
+        coroutineScope: CoroutineScope,
+        onCastSeekBlocked: (() -> Unit)? = null
+    ) {
         this.scope = coroutineScope
+        this.onCastSeekBlocked = onCastSeekBlocked
         scope?.launch {
             val snapshot = runCatching {
                 userPreferencesRepository.getPlaybackQueueSnapshotOnce()
@@ -139,11 +182,64 @@ class PlaybackStateHolder @Inject constructor(
     }
 
     fun setMediaController(controller: MediaController?) {
-        this.mediaController = controller
+        if (controller == null) {
+            mediaControllerStack.clear()
+            mediaController = null
+            return
+        }
+
+        mediaControllerStack.removeAll { it === controller }
+        mediaControllerStack.add(controller)
+        mediaController = controller
+    }
+
+    fun clearMediaController(controller: MediaController?) {
+        if (controller == null) return
+
+        mediaControllerStack.removeAll { it === controller }
+        if (mediaController === controller) {
+            mediaController = mediaControllerStack.lastOrNull()
+        }
+    }
+
+    private fun notifyCastSeekBlocked() {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (
+            lastCastSeekBlockedToastAtMs > 0L &&
+            nowMs - lastCastSeekBlockedToastAtMs < CAST_SEEK_BLOCKED_TOAST_COOLDOWN_MS
+        ) {
+            return
+        }
+
+        lastCastSeekBlockedToastAtMs = nowMs
+        onCastSeekBlocked?.invoke()
+    }
+
+    private fun activeLocalPlayer(): Player {
+        val controller = mediaController
+        return if (controller?.isConnected == true) {
+            controller
+        } else {
+            dualPlayerEngine.masterPlayer
+        }
     }
     
     fun updateStablePlayerState(update: (StablePlayerState) -> StablePlayerState) {
-        _stablePlayerState.update(update)
+        _stablePlayerState.update { current ->
+            val updated = update(current)
+            // Auto-populate index from MediaController if not explicitly set by the update
+            if (updated.currentMediaItemIndex == -1) {
+                if (dualPlayerEngine.isUsingWindowedQueue()) {
+                    updated.copy(currentMediaItemIndex = dualPlayerEngine.getCurrentAbsoluteIndex())
+                } else {
+                    mediaController?.let { controller ->
+                        updated.copy(currentMediaItemIndex = controller.currentMediaItemIndex)
+                    } ?: updated
+                }
+            } else {
+                updated
+            }
+        }
     }
 
     fun setCurrentPosition(positionMs: Long) {
@@ -169,6 +265,7 @@ class PlaybackStateHolder @Inject constructor(
         pausedPositionOverrideMediaId = safeMediaId
         pausedPositionOverrideToken = activeToken
         pausedPositionOverrideMs = safePosition
+        pausedPositionOverrideSetAtMs = SystemClock.elapsedRealtime()
         _currentPosition.value = safePosition
     }
 
@@ -177,6 +274,7 @@ class PlaybackStateHolder @Inject constructor(
             pausedPositionOverrideMediaId = null
             pausedPositionOverrideToken = null
             pausedPositionOverrideMs = null
+            pausedPositionOverrideSetAtMs = 0L
         }
         if (mediaId == null || coldStartSnapshotMediaId == mediaId) {
             clearColdStartSnapshot()
@@ -214,11 +312,29 @@ class PlaybackStateHolder @Inject constructor(
         }
 
         val drift = abs(safeReportedPosition - preferredPosition)
-        if (drift <= DURATION_MISMATCH_TOLERANCE_MS || safeReportedPosition >= preferredPosition) {
-            if (pausedPositionOverrideMediaId == safeMediaId && pausedPositionOverrideToken == activeToken) {
+        val pausedOverrideOwnsThisToken =
+            pausedPositionOverrideMediaId == safeMediaId &&
+                pausedPositionOverrideToken == activeToken
+        val pausedOverrideActive = pausedOverride != null
+        // Stale override fallback: if the player never converges on a freshly-issued seek
+        // we don't want to pin the UI on the requested position forever. After this window
+        // we trust the reported position again.
+        val overrideIsStale = pausedOverrideActive &&
+            pausedPositionOverrideSetAtMs > 0L &&
+            SystemClock.elapsedRealtime() - pausedPositionOverrideSetAtMs > PAUSED_OVERRIDE_MAX_AGE_MS
+        // The `reported >= preferred` shortcut is only safe for the cold-start seed (where
+        // preferred represents "where playback should start" and the player passing it means
+        // the seed has served its purpose). Applying the same shortcut to an active paused
+        // override broke backward seeks — the player still reports the pre-seek (larger)
+        // position for a tick or two after seekTo(), wiping the override before the seek
+        // had landed and snapping the UI back to the old position.
+        val coldStartPassed = !pausedOverrideActive && safeReportedPosition >= preferredPosition
+        if (drift <= DURATION_MISMATCH_TOLERANCE_MS || overrideIsStale || coldStartPassed) {
+            if (pausedOverrideOwnsThisToken) {
                 pausedPositionOverrideMediaId = null
                 pausedPositionOverrideToken = null
                 pausedPositionOverrideMs = null
+                pausedPositionOverrideSetAtMs = 0L
             }
             if (coldStartSnapshotMediaId == safeMediaId && coldStartSnapshotToken == activeToken) {
                 clearColdStartSnapshot()
@@ -240,6 +356,7 @@ class PlaybackStateHolder @Inject constructor(
                 pausedPositionOverrideMediaId = null
                 pausedPositionOverrideToken = null
                 pausedPositionOverrideMs = null
+                pausedPositionOverrideSetAtMs = 0L
             }
             return null
         }
@@ -259,6 +376,7 @@ class PlaybackStateHolder @Inject constructor(
         pausedPositionOverrideMediaId = null
         pausedPositionOverrideToken = null
         pausedPositionOverrideMs = null
+        pausedPositionOverrideSetAtMs = 0L
 
         if (coldStartSnapshotToken != null) {
             clearColdStartSnapshot()
@@ -280,12 +398,19 @@ class PlaybackStateHolder @Inject constructor(
         val remoteMediaClient = castSession?.remoteMediaClient
 
         if (castSession != null && remoteMediaClient != null) {
-            if (remoteMediaClient.isPlaying) {
+            val remotePlayback = remoteMediaClient.mediaStatus?.let { mediaStatus ->
+                CastRemotePlaybackState.project(
+                    mediaStatus = mediaStatus,
+                    previousPlayIntent = _stablePlayerState.value.playWhenReady
+                )
+            }
+            if (remoteMediaClient.isPlaying || remotePlayback?.playWhenReady == true) {
                 castStateHolder.castPlayer?.pause()
                 _stablePlayerState.update {
                     it.copy(
                         isPlaying = false,
-                        playWhenReady = false
+                        playWhenReady = false,
+                        isBuffering = false
                     )
                 }
             } else {
@@ -302,10 +427,13 @@ class PlaybackStateHolder @Inject constructor(
                 }
             }
         } else {
-            val controller = mediaController ?: return
+            val controller = activeLocalPlayer()
             if (controller.isPlaying) {
                 controller.pause()
             } else {
+                if (controller.playbackState == Player.STATE_IDLE && controller.mediaItemCount > 0) {
+                    controller.prepare()
+                }
                 controller.play()
             }
         }
@@ -315,10 +443,26 @@ class PlaybackStateHolder @Inject constructor(
         val castSession = castStateHolder.castSession.value
         if (castSession != null && castSession.remoteMediaClient != null) {
             val targetPosition = position.coerceAtLeast(0L)
+            val castPlayer = castStateHolder.castPlayer
+            if (castPlayer?.canSeekCurrentItem() == false) {
+                remoteSeekUnlockJob?.cancel()
+                castStateHolder.setRemotelySeeking(false)
+                castSession.remoteMediaClient?.requestStatus()
+                notifyCastSeekBlocked()
+                Timber.tag(TAG).w("Ignoring Cast seek for current item because receiver-side Ogg seeking is unstable.")
+                return
+            }
             castStateHolder.setRemotelySeeking(true)
             castStateHolder.setRemotePosition(targetPosition)
             setCurrentPosition(targetPosition)
-            castStateHolder.castPlayer?.seek(targetPosition)
+            if (castPlayer?.seek(targetPosition) != true) {
+                castStateHolder.setRemotelySeeking(false)
+                castSession.remoteMediaClient?.requestStatus()
+                if (castPlayer != null) {
+                    notifyCastSeekBlocked()
+                }
+                return
+            }
 
             remoteSeekUnlockJob?.cancel()
             remoteSeekUnlockJob = scope?.launch {
@@ -331,9 +475,14 @@ class PlaybackStateHolder @Inject constructor(
             remoteSeekUnlockJob?.cancel()
             castStateHolder.setRemotelySeeking(false)
             val targetPosition = position.coerceAtLeast(0L)
-            val currentMediaId = mediaController?.currentMediaItem?.mediaId
+            val player = activeLocalPlayer()
+            val currentMediaId = player.currentMediaItem?.mediaId
             rememberPausedPositionOverride(currentMediaId, targetPosition)
-            mediaController?.seekTo(targetPosition)
+            // Mark the seek before dispatching so the engine's HAL-reset heuristic does
+            // not misinterpret the resulting STATE_BUFFERING as an audio HAL underflow and
+            // rebuild the players (which would race with the in-flight seek command).
+            dualPlayerEngine.notifyExternalSeekInitiated()
+            player.seekTo(targetPosition)
         }
     }
 
@@ -342,7 +491,7 @@ class PlaybackStateHolder @Inject constructor(
         if (castSession != null && castSession.remoteMediaClient != null) {
             castStateHolder.castPlayer?.previous()
         } else {
-            val controller = mediaController ?: return
+            val controller = activeLocalPlayer()
              if (controller.currentPosition > 10000) { // 10 seconds
                  controller.seekTo(0)
             } else {
@@ -356,7 +505,7 @@ class PlaybackStateHolder @Inject constructor(
         if (castSession != null && castSession.remoteMediaClient != null) {
             castStateHolder.castPlayer?.next()
         } else {
-             mediaController?.seekToNext()
+             activeLocalPlayer().seekToNext()
         }
     }
 
@@ -478,52 +627,68 @@ class PlaybackStateHolder @Inject constructor(
     fun startProgressUpdates() {
         stopProgressUpdates()
         progressJob = scope?.launch {
-            while (true) {
-                val castSession = castStateHolder.castSession.value
-                val isRemote = castSession?.remoteMediaClient != null
-                
-                if (isRemote) {
-                    val remoteClient = castSession?.remoteMediaClient
-                    if (remoteClient != null) {
-                        val isRemotePlaying = remoteClient.isPlaying
-                        val currentPosition = remoteClient.approximateStreamPosition.coerceAtLeast(0L)
-                        val songDurationHint = _stablePlayerState.value.currentSong?.duration ?: 0L
-                        val duration = resolveEffectiveDuration(
-                            reportedDurationMs = remoteClient.streamDuration,
-                            songDurationHintMs = songDurationHint,
-                            currentPositionMs = currentPosition
+            // Battery: only spin the polling loop while something is actually
+            // observing currentPosition. With no subscribers (screen off and
+            // no lock-screen progress UI mounted), this collectLatest sits
+            // idle and the CPU stays asleep. As soon as a subscriber appears
+            // (player sheet opened, widget bound, etc.) the inner loop resumes.
+            _currentPosition.subscriptionCount.collectLatest { subscriberCount ->
+                if (subscriberCount == 0) return@collectLatest
+                coroutineScope {
+                    while (isActive) {
+                        val tickMs = currentProgressTickMs()
+                        val castSession = castStateHolder.castSession.value
+                        val remoteClient = castSession?.remoteMediaClient
+                        val isRemote = remoteClient != null
+
+                        if (isRemote) {
+                    val activeRemoteClient = checkNotNull(remoteClient)
+                    val previousPlayIntent = _stablePlayerState.value.playWhenReady
+                    val remotePlayback = activeRemoteClient.mediaStatus?.let { mediaStatus ->
+                        CastRemotePlaybackState.project(
+                            mediaStatus = mediaStatus,
+                            previousPlayIntent = previousPlayIntent
                         )
-                        val isRemotelySeeking = castStateHolder.isRemotelySeeking.value
-                        if (!isRemotelySeeking) {
-                            castStateHolder.setRemotePosition(currentPosition)
-                        }
+                    }
+                    val isRemotePlaying = remotePlayback?.isPlaying ?: activeRemoteClient.isPlaying
+                    val remotePlayWhenReady = remotePlayback?.playWhenReady ?: activeRemoteClient.isPlaying
+                    val currentPosition = activeRemoteClient.approximateStreamPosition.coerceAtLeast(0L)
+                    val songDurationHint = _stablePlayerState.value.currentSong?.duration ?: 0L
+                    val duration = resolveEffectiveDuration(
+                        reportedDurationMs = activeRemoteClient.streamDuration,
+                        songDurationHintMs = songDurationHint,
+                        currentPositionMs = currentPosition
+                    )
+                    val isRemotelySeeking = castStateHolder.isRemotelySeeking.value
+                    if (!isRemotelySeeking) {
+                        castStateHolder.setRemotePosition(currentPosition)
+                    }
 
-                        listeningStatsTracker.onProgress(currentPosition, isRemotePlaying)
-                        val nextPosition = if (isRemotelySeeking) _currentPosition.value else currentPosition
-                        if (_currentPosition.value != nextPosition) {
-                            _currentPosition.value = nextPosition
-                        }
+                    val nextPosition = if (isRemotelySeeking) _currentPosition.value else currentPosition
+                    if (_currentPosition.value != nextPosition) {
+                        _currentPosition.value = nextPosition
+                    }
 
-                        _stablePlayerState.update { state ->
-                            if (
-                                state.totalDuration == duration &&
-                                state.isPlaying == isRemotePlaying &&
-                                state.playWhenReady == isRemotePlaying
-                            ) {
-                                state
-                            } else {
-                                state.copy(
-                                    totalDuration = duration,
-                                    isPlaying = isRemotePlaying,
-                                    playWhenReady = isRemotePlaying
-                                )
-                            }
+                    _stablePlayerState.update { state ->
+                        if (
+                            state.totalDuration == duration &&
+                            state.isPlaying == isRemotePlaying &&
+                            state.playWhenReady == remotePlayWhenReady &&
+                            state.isBuffering == (remotePlayback?.isBuffering ?: false)
+                        ) {
+                            state
+                        } else {
+                            state.copy(
+                                totalDuration = duration,
+                                isPlaying = isRemotePlaying,
+                                playWhenReady = remotePlayWhenReady,
+                                isBuffering = remotePlayback?.isBuffering ?: false
+                            )
                         }
                     }
                 } else {
-                     val controller = mediaController
-                     // Media3: Check isPlaying or playbackState == READY/BUFFERING
-                     if (controller != null && controller.isPlaying && !isSeeking) {
+                     val controller = activeLocalPlayer()
+                     if (shouldSampleLocalProgress(controller)) {
                          val visibleSong = _stablePlayerState.value.currentSong
                          val currentMediaId = controller.currentMediaItem?.mediaId
                          val hasMediaMismatch = visibleSong?.id != null &&
@@ -531,41 +696,59 @@ class PlaybackStateHolder @Inject constructor(
                              visibleSong.id != currentMediaId
 
                          if (hasMediaMismatch) {
-                             Timber.tag(TAG).v(
+                            Timber.tag(TAG).v(
                                  "Skipping local progress tick due media mismatch (visible=%s, player=%s)",
                                  visibleSong?.id,
                                  currentMediaId
                              )
-                            delay(PROGRESS_TICK_MS)
+                            delay(tickMs)
                             continue
                         }
 
-                         val currentPosition = controller.currentPosition.coerceAtLeast(0L)
-                         val songDurationHint = visibleSong?.duration ?: 0L
-                         val duration = resolveEffectiveDuration(
-                             reportedDurationMs = controller.duration,
-                             songDurationHintMs = songDurationHint,
-                             currentPositionMs = currentPosition
-                         )
-                         
-                         listeningStatsTracker.onProgress(currentPosition, true)
-                         val resolvedPosition = resolveUiPosition(currentMediaId, currentPosition)
-                         if (_currentPosition.value != resolvedPosition) {
-                             _currentPosition.value = resolvedPosition
+                          val currentPosition = controller.currentPosition.coerceAtLeast(0L)
+                          val songDurationHint = visibleSong?.duration ?: 0L
+                          val duration = resolveEffectiveDuration(
+                              reportedDurationMs = controller.duration,
+                              songDurationHintMs = songDurationHint,
+                              currentPositionMs = currentPosition
+                          )
+
+                          val resolvedPosition = resolveUiPosition(currentMediaId, currentPosition)
+                          if (_currentPosition.value != resolvedPosition) {
+                              _currentPosition.value = resolvedPosition
+                          }
+
+                          _stablePlayerState.update { state ->
+                              if (state.totalDuration == duration) {
+                                  state
+                              } else {
+                                  state.copy(totalDuration = duration)
+                              }
                          }
-                         
-                         _stablePlayerState.update { state ->
-                             if (state.totalDuration == duration) {
-                                 state
-                             } else {
-                                 state.copy(totalDuration = duration)
-                             }
-                        }
-                     }
+                      }
                 }
-                delay(PROGRESS_TICK_MS)
+                        delay(tickMs)
+                    }
+                }
             }
         }
+    }
+
+    private fun shouldSampleLocalProgress(controller: Player): Boolean {
+        if (isSeeking) return false
+        if (controller.mediaItemCount <= 0) return false
+        if (controller.isPlaying) return true
+
+        return controller.playWhenReady &&
+            controller.playbackState != Player.STATE_IDLE &&
+            controller.playbackState != Player.STATE_ENDED
+    }
+
+    private fun currentProgressTickMs(): Long {
+        if (!powerManager.isInteractive) return BACKGROUND_TICK_MS
+        // Interactive but the slider isn't mounted (mini-player / lock-screen
+        // notification only) — second-level precision is enough.
+        return if (_sliderUiMounted.value) SLIDER_TICK_MS else MINIPLAYER_TICK_MS
     }
 
     fun stopProgressUpdates() {
@@ -934,6 +1117,16 @@ class PlaybackStateHolder @Inject constructor(
                 }
             }
         }
+    }
+
+    fun onCleared() {
+        stopProgressUpdates()
+        remoteSeekUnlockJob?.cancel()
+        remoteSeekUnlockJob = null
+        shuffleToggleJob?.cancel()
+        shuffleToggleJob = null
+        scope = null
+        onCastSeekBlocked = null
     }
 
 }

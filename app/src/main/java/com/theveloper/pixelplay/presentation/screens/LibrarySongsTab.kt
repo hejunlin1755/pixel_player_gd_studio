@@ -34,6 +34,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,7 +51,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.LoadState
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
+import com.theveloper.pixelplay.presentation.components.songFastScrollLabel
+import androidx.compose.ui.text.style.TextOverflow
 
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -77,10 +82,19 @@ fun LibrarySongsTab(
     hasCurrentSong: Boolean = false
 ) {
     val listState = rememberLazyListState()
+    val dummyListState = rememberLazyListState()
     val pullToRefreshState = rememberPullToRefreshState()
     val coroutineScope = rememberCoroutineScope()
     val visibilityCallback by rememberUpdatedState(onLocateCurrentSongVisibilityChanged)
     val registerActionCallback by rememberUpdatedState(onRegisterLocateCurrentSongAction)
+    val songFastScrollLabelProvider = remember(songs, sortOption) {
+        { index: Int ->
+            songFastScrollLabel(
+                song = songs.peek(index),
+                sortOption = sortOption
+            )
+        }
+    }
     var lastHandledSongSortKey by remember { mutableStateOf(sortOption.storageKey) }
     var pendingSongSortScrollReset by remember { mutableStateOf(false) }
     var songSortSawRefreshLoading by remember { mutableStateOf(false) }
@@ -111,7 +125,10 @@ fun LibrarySongsTab(
     LaunchedEffect(Unit) {
         playerViewModel.scrollToIndexEvent.collect { index ->
             if (index >= 0) {
-                 launch {
+                 val firstVisible = listState.firstVisibleItemIndex
+                 if (Math.abs(index - firstVisible) > 20) {
+                     listState.scrollToItem(index)
+                 } else {
                      listState.animateScrollToItem(index)
                  }
             }
@@ -160,7 +177,7 @@ fun LibrarySongsTab(
     // - If visible -> Hide button
     // - If not visible -> Show button
 
-    LaunchedEffect(currentSongListIndex, songs, isLoading, listState) {
+    LaunchedEffect(currentSongListIndex, songs.itemCount, isLoading, listState, currentSongId) {
         // If list is empty or loading, hide button
         if (songs.itemCount == 0 || isLoading) {
             visibilityCallback(false)
@@ -177,10 +194,12 @@ fun LibrarySongsTab(
 
         // If song IS loaded, check visibility using layout info
         snapshotFlow {
-            val visibleItems = listState.layoutInfo.visibleItemsInfo
+            val layoutInfo = listState.layoutInfo
+            val visibleItems = layoutInfo.visibleItemsInfo
             if (visibleItems.isEmpty()) {
                 false
             } else {
+                // Consider it visible if it's within the range of visible indices
                 currentSongListIndex in visibleItems.first().index..visibleItems.last().index
             }
         }
@@ -197,14 +216,9 @@ fun LibrarySongsTab(
         }
     }
 
-    // Handle different loading states
     val refreshState = songs.loadState.refresh
     val reachedEndOfPagination = songs.loadState.append.endOfPaginationReached
-    val shouldShowInitialLoading = songs.itemCount == 0 && (
-        isLoading ||
-            refreshState is LoadState.Loading ||
-            (refreshState is LoadState.NotLoading && !reachedEndOfPagination)
-    )
+    val shouldShowInitialLoading = songs.itemCount == 0 && isLoading
 
     when {
         refreshState is LoadState.Error && songs.itemCount == 0 -> {
@@ -216,15 +230,15 @@ fun LibrarySongsTab(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Error loading songs", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.library_error_loading_songs), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        error.localizedMessage ?: "Unknown error",
+                        error.localizedMessage ?: stringResource(R.string.common_error_unknown),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(onClick = { songs.retry() }) {
-                        Text("Retry")
+                        Text(stringResource(R.string.library_action_retry), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -243,7 +257,6 @@ fun LibrarySongsTab(
                         )
                     )
                     .fillMaxSize(),
-                state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap)
             ) {
@@ -283,9 +296,10 @@ fun LibrarySongsTab(
                     }
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
+                        val activeListState = if (songs.itemCount > 0) listState else dummyListState
                         LazyColumn(
                             modifier = Modifier
-                                .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
+                                .padding(start = 12.dp, end = if (LocalShowScrollbar.current && (activeListState.canScrollForward || activeListState.canScrollBackward)) 22.dp else 12.dp, bottom = 6.dp)
                                 .clip(
                                     RoundedCornerShape(
                                         topStart = 26.dp,
@@ -294,7 +308,7 @@ fun LibrarySongsTab(
                                         bottomEnd = PlayerSheetCollapsedCornerRadius
                                     )
                                 ),
-                            state = listState,
+                            state = activeListState,
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + 30.dp)
                         ) {
@@ -362,7 +376,8 @@ fun LibrarySongsTab(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
                                 .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                            listState = listState
+                            listState = activeListState,
+                            dragLabelProvider = songFastScrollLabelProvider
                         )
                     }
                 }

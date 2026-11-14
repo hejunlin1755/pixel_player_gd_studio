@@ -24,6 +24,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.Switch
 import androidx.compose.ui.draw.scale
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +47,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.util.lerp
+import androidx.compose.ui.text.style.TextOverflow
 
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 
@@ -57,7 +65,9 @@ fun LyricsFloatingToolbar(
     backgroundColor: Color,
     onBackgroundColor: Color,
     accentColor: Color,
-    onAccentColor: Color
+    onAccentColor: Color,
+    // Draw-phase lambda: 0f = fully visible, 1f = dismissed. Read inside graphicsLayer to avoid recomposition per frame.
+    backProgressProvider: () -> Float = { 0f }
 ) {
     if (showSyncedLyrics == null) return
 
@@ -67,7 +77,28 @@ fun LyricsFloatingToolbar(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val backInteractionSource = remember { MutableInteractionSource() }
+        val isBackPressed by backInteractionSource.collectIsPressedAsState()
+
+        // Animate scale on press: shrinks on press, springs back on release.
+        val backPressScale by animateFloatAsState(
+            targetValue = if (isBackPressed) 0.82f else 1f,
+            animationSpec = spring(
+                stiffness = Spring.StiffnessMedium,
+                dampingRatio = Spring.DampingRatioMediumBouncy
+            ),
+            label = "backPressScale"
+        )
+
         IconButton(
+            modifier = Modifier.graphicsLayer {
+                // Combine press scale with predictive back gesture scale.
+                val gestureScale = lerp(1f, 0.7f, backProgressProvider())
+                val combined = backPressScale * gestureScale
+                scaleX = combined
+                scaleY = combined
+            },
+            interactionSource = backInteractionSource,
             colors = IconButtonDefaults.iconButtonColors(
                 containerColor = backgroundColor,
                 contentColor = onBackgroundColor
@@ -76,7 +107,7 @@ fun LyricsFloatingToolbar(
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.common_back),
                 tint = onBackgroundColor
             )
         }
@@ -99,7 +130,9 @@ fun LyricsFloatingToolbar(
                 inactiveContentColor = onBackgroundColor,
                 activeCornerRadius = 50.dp,
                 onClick = { onShowSyncedLyricsChange(true) },
-                text = "Synced"
+                text = stringResource(R.string.lyrics_mode_synced),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
 
             ToggleSegmentButton(
@@ -112,7 +145,9 @@ fun LyricsFloatingToolbar(
                 inactiveContentColor = onBackgroundColor,
                 activeCornerRadius = 50.dp,
                 onClick = { onShowSyncedLyricsChange(false) },
-                text = "Static"
+                text = stringResource(R.string.lyrics_mode_static),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
         
@@ -127,7 +162,7 @@ fun LyricsFloatingToolbar(
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
-                contentDescription = "Lyrics options",
+                contentDescription = stringResource(R.string.lyrics_options),
                 tint = onBackgroundColor
             )
         }

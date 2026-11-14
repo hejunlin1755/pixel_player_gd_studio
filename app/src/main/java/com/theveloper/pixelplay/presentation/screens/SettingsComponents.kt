@@ -5,6 +5,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -56,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,7 +68,9 @@ import com.theveloper.pixelplay.data.worker.SyncProgress
 import com.theveloper.pixelplay.presentation.viewmodel.LyricsRefreshProgress
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.unit.sp
 import androidx.core.view.HapticFeedbackConstantsCompat
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
 import com.theveloper.pixelplay.presentation.utils.LocalAppHapticsConfig
 import com.theveloper.pixelplay.presentation.utils.performAppCompatHapticFeedback
 
@@ -336,7 +342,7 @@ fun ThemeSelectorItem(
                                 if (isSelected) {
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Selected",
+                                        contentDescription = stringResource(R.string.common_selected),
                                         tint = contentColor
                                     )
                                 }
@@ -385,14 +391,18 @@ fun SliderSettingsItem(
             ) {
                 Text(
                         text = label,
+                        modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                         text = valueText(value),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
                 )
             }
             Slider(
@@ -439,12 +449,12 @@ fun RefreshLibraryItem(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                            text = "Refresh Library",
+                            text = stringResource(R.string.settings_refresh_library_title),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                            text = "Scan entire library for new and modified files.",
+                            text = stringResource(R.string.settings_refresh_library_subtitle),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -459,13 +469,24 @@ fun RefreshLibraryItem(
                     enabled = !isSyncing,
                     modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
                         imageVector = Icons.Outlined.Refresh,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Full Rescan")
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TightWrapText(
+                        text = stringResource(R.string.settings_action_full_rescan),
+                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
+                        lineHeight = 22.sp,
+                    )
+                }
             }
              
             Spacer(modifier = Modifier.height(8.dp))
@@ -480,13 +501,24 @@ fun RefreshLibraryItem(
                     ),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
             ) {
-                Icon(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
                         imageVector = Icons.Outlined.DeleteForever,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Rebuild Database")
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TightWrapText(
+                        text = stringResource(R.string.settings_action_rebuild_database),
+                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
+                        lineHeight = 22.sp,
+                    )
+                }
             }
 
             if (isSyncing) {
@@ -499,8 +531,13 @@ fun RefreshLibraryItem(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                            text =
-                                    "$phaseLabel • ${(syncProgress.progress * 100).toInt()}% (${syncProgress.currentCount}/${syncProgress.totalCount})",
+                            text = stringResource(
+                                R.string.settings_sync_progress_detailed,
+                                phaseLabel,
+                                (syncProgress.progress * 100).toInt(),
+                                syncProgress.currentCount,
+                                syncProgress.totalCount
+                            ),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -508,7 +545,10 @@ fun RefreshLibraryItem(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                            text = "$phaseLabel…",
+                            text = stringResource(
+                                R.string.settings_sync_progres_indeterminate,
+                                phaseLabel
+                            ),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -518,91 +558,25 @@ fun RefreshLibraryItem(
     }
 }
 
-private fun syncPhaseLabel(phase: SyncProgress.SyncPhase): String =
-        when (phase) {
-            SyncProgress.SyncPhase.IDLE -> "Preparing sync"
-            SyncProgress.SyncPhase.FETCHING_MEDIASTORE -> "Reading MediaStore"
-            SyncProgress.SyncPhase.PROCESSING_FILES -> "Processing tracks"
-            SyncProgress.SyncPhase.SAVING_TO_DATABASE -> "Saving to database"
-            SyncProgress.SyncPhase.SCANNING_LRC -> "Scanning lyrics files"
-            SyncProgress.SyncPhase.COMPLETING -> "Completing sync"
-        }
-
 @Composable
-fun RefreshLyricsItem(
-        isRefreshing: Boolean,
-        progress: LyricsRefreshProgress,
-        onRefresh: () -> Unit
-) {
-    Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                        modifier = Modifier.padding(end = 16.dp).size(24.dp),
-                        contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                            painter = painterResource(id = R.drawable.rounded_lyrics_24),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary
-                    )
+private fun syncPhaseLabel(phase: SyncProgress.SyncPhase): String =
+        stringResource(
+                when (phase) {
+                    SyncProgress.SyncPhase.IDLE -> R.string.settings_sync_phase_preparing
+                    SyncProgress.SyncPhase.FETCHING_MEDIASTORE ->
+                            R.string.settings_sync_phase_reading_mediastore
+                    SyncProgress.SyncPhase.PROCESSING_FILES ->
+                            R.string.settings_sync_phase_reading_processing_tracks
+                    SyncProgress.SyncPhase.SAVING_TO_DATABASE ->
+                            R.string.settings_sync_phase_saving_db
+                    SyncProgress.SyncPhase.SCANNING_LRC -> R.string.settings_sync_phase_scanning_lrc
+                    SyncProgress.SyncPhase.CLEANING_CACHE ->
+                            R.string.settings_sync_phase_cleaning_cache
+                    SyncProgress.SyncPhase.SYNCING_CLOUD ->
+                            R.string.settings_sync_phase_syncing_cloud
+                    SyncProgress.SyncPhase.COMPLETING -> R.string.settings_sync_phase_completing
                 }
-
-                Column(
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                            text = "Refresh Lyrics",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                            text = "Automatically fetch lyrics for all songs using lrclib.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                FilledIconButton(
-                        onClick = onRefresh,
-                        enabled = !isRefreshing,
-                        colors =
-                                IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                ) {
-                    Icon(
-                            imageVector = Icons.Outlined.Sync,
-                            contentDescription = "Refresh lyrics",
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-
-            if (isRefreshing && progress.hasProgress) {
-                Spacer(modifier = Modifier.height(12.dp))
-                LinearProgressIndicator(
-                        progress = { progress.progress },
-                        modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                        text =
-                                "Processing ${progress.currentCount} of ${progress.totalSongs} songs",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
+        )
 
 @Composable
 fun ActionSettingsItem(
@@ -656,7 +630,7 @@ fun ActionSettingsItem(
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(primaryActionLabel)
+                Text(primaryActionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
 
             // Secondary Action (Optional)
@@ -667,7 +641,7 @@ fun ActionSettingsItem(
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(secondaryActionLabel)
+                    Text(secondaryActionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -675,7 +649,7 @@ fun ActionSettingsItem(
 }
 
 @Composable
-fun GeminiApiKeyItem(
+fun AiApiKeyItem(
     apiKey: String,
     onApiKeySave: (String) -> Unit,
     title: String,
@@ -712,7 +686,7 @@ fun GeminiApiKeyItem(
                 value = localApiKey,
                 onValueChange = { localApiKey = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Enter API Key") },
+                placeholder = { Text(stringResource(R.string.settings_enter_api_key_placeholder)) },
                 singleLine = true,
                 visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
             )
@@ -729,11 +703,11 @@ fun GeminiApiKeyItem(
                     },
                     enabled = hasChanges
                 ) {
-                    Text("Save")
+                    Text(stringResource(R.string.common_save), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (showSaved) {
                     Text(
-                        text = "Saved!",
+                        text = stringResource(R.string.common_saved),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -745,7 +719,7 @@ fun GeminiApiKeyItem(
 }
 
 @Composable
-fun GeminiSystemPromptItem(
+fun AiSystemPromptItem(
     systemPrompt: String,
     defaultPrompt: String,
     onSystemPromptSave: (String) -> Unit,
@@ -758,9 +732,18 @@ fun GeminiSystemPromptItem(
     val isDefault = systemPrompt == defaultPrompt
     var showSaved by remember { mutableStateOf(false) }
     val presets = listOf(
-        "Balanced" to "You are a helpful AI assistant inside a music player app. Build playlists that match the user request first, then optimize flow and variety. Prefer familiar tracks with a small discovery ratio and avoid repetitive artist clustering.",
-        "Creative" to "You are a creative playlist curator. Follow the user request, but add tasteful surprises and deeper cuts when they still fit the mood. Keep transitions smooth and diversify artists, tempos, and eras.",
-        "Precise" to "You are a strict music recommendation assistant. Prioritize exact prompt matching, minimize weak matches, and keep results consistent with requested genres, mood, and activity. Return concise, deterministic selections over novelty."
+        stringResource(R.string.settings_preset_professional_curator_name) to
+            stringResource(R.string.settings_preset_professional_curator_prompt),
+        stringResource(R.string.settings_preset_creative_maverick_name) to
+            stringResource(R.string.settings_preset_creative_maverick_prompt),
+        stringResource(R.string.settings_preset_strict_librarian_name) to
+            stringResource(R.string.settings_preset_strict_librarian_prompt),
+        stringResource(R.string.settings_preset_atmospheric_guide_name) to
+            stringResource(R.string.settings_preset_atmospheric_guide_prompt),
+        stringResource(R.string.settings_preset_sonic_enthusiast_name) to
+            stringResource(R.string.settings_preset_sonic_enthusiast_prompt),
+        stringResource(R.string.settings_preset_energy_catalyst_name) to
+            stringResource(R.string.settings_preset_energy_catalyst_prompt)
     )
 
     LaunchedEffect(showSaved) {
@@ -787,21 +770,23 @@ fun GeminiSystemPromptItem(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Preset Prompts",
+                text = stringResource(R.string.settings_preset_prompts),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 presets.forEach { preset ->
                     OutlinedButton(
-                        onClick = { localPrompt = preset.second },
-                        modifier = Modifier.weight(1f)
+                        onClick = { 
+                            localPrompt = preset.second
+                        },
+                        modifier = Modifier.wrapContentWidth()
                     ) {
-                        Text(text = preset.first, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(text = preset.first, maxLines = 1)
                     }
                 }
             }
@@ -810,7 +795,7 @@ fun GeminiSystemPromptItem(
                 value = localPrompt,
                 onValueChange = { localPrompt = it },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 200.dp),
-                placeholder = { Text("Enter system prompt...") },
+                placeholder = { Text(stringResource(R.string.settings_system_prompt_placeholder)) },
                 minLines = 3,
                 maxLines = 6
             )
@@ -827,16 +812,18 @@ fun GeminiSystemPromptItem(
                     },
                     enabled = hasChanges
                 ) {
-                    Text("Save")
+                    Text(stringResource(R.string.common_save), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (!isDefault) {
-                    OutlinedButton(onClick = onReset) {
-                        Text("Reset")
+                    OutlinedButton(onClick = {
+                        onReset()
+                    }) {
+                        Text(stringResource(R.string.common_reset), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 if (showSaved) {
                     Text(
-                        text = "Saved!",
+                        text = stringResource(R.string.common_saved),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold

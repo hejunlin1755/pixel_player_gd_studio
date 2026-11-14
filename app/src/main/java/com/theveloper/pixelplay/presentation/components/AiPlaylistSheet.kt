@@ -1,5 +1,6 @@
 package com.theveloper.pixelplay.presentation.components
 
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -32,6 +33,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -54,13 +57,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.ui.theme.ExpTitleTypography
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
@@ -71,7 +75,10 @@ fun AiPlaylistSheet(
     onDismiss: () -> Unit,
     onGenerateClick: (prompt: String, minLength: Int, maxLength: Int) -> Unit,
     isGenerating: Boolean,
-    error: String?
+    isSuccess: Boolean,
+    status: String?,
+    error: String?,
+    onRetry: () -> Unit
 ) {
     var prompt by remember { mutableStateOf("") }
     var minLength by remember { mutableStateOf("5") }
@@ -82,7 +89,6 @@ fun AiPlaylistSheet(
     )
 
     val colors = MaterialTheme.colorScheme
-    val haptic = LocalHapticFeedback.current
 
     val textFieldColors = TextFieldDefaults.colors(
         focusedContainerColor = colors.surfaceContainerHigh,
@@ -119,7 +125,7 @@ fun AiPlaylistSheet(
         )
     }
 
-    // Animation for AI icon when generating
+    // AI UI Optimization: Infinite transitions for a "living" generative feel
     val infiniteTransition = rememberInfiniteTransition(label = "ai_animation")
     val iconRotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -140,7 +146,7 @@ fun AiPlaylistSheet(
         label = "scale"
     )
 
-    // Button press animation state
+    // AI UI Optimization: Bouncy haptic interaction for the generate button
     var isPressed by remember { mutableStateOf(false) }
     
     // Animated scale for the button - shrinks when pressed, bounces back when released
@@ -222,7 +228,7 @@ fun AiPlaylistSheet(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = "AI",
+                            contentDescription = null,
                             modifier = Modifier.size(32.dp),
                             tint = if (isGenerating) colors.onPrimaryContainer else colors.onTertiaryContainer
                         )
@@ -231,25 +237,33 @@ fun AiPlaylistSheet(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "AI",
+                        text = if (isSuccess) {
+                            stringResource(R.string.ai_playlist_headline_perfect)
+                        } else {
+                            stringResource(R.string.ai_playlist_headline_daily_mix)
+                        },
                         style = ExpTitleTypography.displayMedium.copy(
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Bold
                         ),
-                        color = colors.primary
+                        color = if (isSuccess) colors.tertiary else colors.primary
                     )
                     Text(
-                        text = "Playlist Generator",
+                        text = if (isSuccess) {
+                            stringResource(R.string.ai_playlist_subtitle_journey_ready)
+                        } else {
+                            stringResource(R.string.ai_playlist_subtitle_generator)
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = GoogleSansRounded,
-                        color = colors.onSurfaceVariant
+                        color = if (isSuccess) colors.tertiary else colors.onSurfaceVariant
                     )
                 }
             }
 
             // Description text
             Text(
-                text = "Describe the vibe, mood, or activity and let AI curate the perfect playlist from your library.",
+                text = stringResource(R.string.ai_playlist_description),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()
@@ -267,7 +281,7 @@ fun AiPlaylistSheet(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Playlist size",
+                        text = stringResource(R.string.ai_playlist_section_size),
                         style = MaterialTheme.typography.labelLarge,
                         fontFamily = GoogleSansRounded,
                         fontWeight = FontWeight.SemiBold,
@@ -280,7 +294,7 @@ fun AiPlaylistSheet(
                         OutlinedTextField(
                             value = minLength,
                             onValueChange = { minLength = it.filter { char -> char.isDigit() } },
-                            label = { Text("Min songs") },
+                            label = { Text(stringResource(R.string.ai_playlist_min_songs)) },
                             modifier = Modifier.weight(1f),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
@@ -290,7 +304,7 @@ fun AiPlaylistSheet(
                         OutlinedTextField(
                             value = maxLength,
                             onValueChange = { maxLength = it.filter { char -> char.isDigit() } },
-                            label = { Text("Max songs") },
+                            label = { Text(stringResource(R.string.ai_playlist_max_songs)) },
                             modifier = Modifier.weight(1f),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
@@ -309,7 +323,7 @@ fun AiPlaylistSheet(
                 onValueChange = { prompt = it },
                 placeholder = { 
                     Text(
-                        "e.g. Chill evening vibes, upbeat workout energy...",
+                        stringResource(R.string.ai_playlist_prompt_placeholder),
                         color = colors.onSurfaceVariant.copy(alpha = 0.6f)
                     ) 
                 },
@@ -320,7 +334,7 @@ fun AiPlaylistSheet(
                 maxLines = 4
             )
 
-            // Error message
+            // Error message with Retry
             AnimatedVisibility(
                 visible = error != null,
                 enter = fadeIn() + scaleIn(initialScale = 0.9f),
@@ -329,14 +343,68 @@ fun AiPlaylistSheet(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = smoothCornerShape,
-                    color = colors.errorContainer
+                    color = colors.errorContainer,
+                    onClick = onRetry
                 ) {
-                    Text(
-                        text = error ?: "",
-                        color = colors.onErrorContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = error ?: "",
+                            color = colors.onErrorContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Rounded.Restore, null, tint = colors.error, modifier = Modifier.size(18.dp))
+                            Text(
+                                text = stringResource(R.string.ai_playlist_tap_to_retry),
+                                color = colors.error,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Success Feedback
+            AnimatedVisibility(
+                visible = isSuccess,
+                enter = fadeIn() + scaleIn(initialScale = 0.8f),
+                exit = fadeOut() + scaleOut(targetScale = 0.8f)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = smoothCornerShape,
+                    color = colors.tertiaryContainer,
+                    tonalElevation = 4.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome, 
+                            contentDescription = null, 
+                            tint = colors.onTertiaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = status ?: stringResource(R.string.ai_playlist_status_default),
+                            color = colors.onTertiaryContainer,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = GoogleSansRounded
+                        )
+                    }
                 }
             }
 
@@ -356,12 +424,11 @@ fun AiPlaylistSheet(
                         else 
                             colors.primaryContainer
                     )
-                    .pointerInput(prompt, isGenerating) {
+                    .pointerInput(prompt, isGenerating, isSuccess) {
                         detectTapGestures(
                             onPress = {
-                                if (prompt.isNotBlank() && !isGenerating) {
+                                if (prompt.isNotBlank() && !isGenerating && !isSuccess) {
                                     isPressed = true
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     tryAwaitRelease()
                                     isPressed = false
                                     val minLengthInt = minLength.toIntOrNull() ?: 5
@@ -377,7 +444,22 @@ fun AiPlaylistSheet(
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isGenerating) {
+                    if (isSuccess) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                            tint = colors.onTertiaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(R.string.ai_playlist_ready_to_play),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontFamily = GoogleSansRounded,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onTertiaryContainer
+                        )
+                    } else if (isGenerating) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(22.dp),
                             strokeWidth = 2.5.dp,
@@ -385,7 +467,7 @@ fun AiPlaylistSheet(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Generating...",
+                            text = status ?: stringResource(R.string.ai_playlist_generating),
                             style = MaterialTheme.typography.titleMedium,
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.SemiBold,
@@ -403,7 +485,7 @@ fun AiPlaylistSheet(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Generate Playlist",
+                            text = stringResource(R.string.ai_playlist_generate),
                             style = MaterialTheme.typography.titleMedium,
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.SemiBold,

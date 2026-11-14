@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.work.WorkManager
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
@@ -21,6 +22,8 @@ import com.theveloper.pixelplay.data.database.EngagementDao
 import com.theveloper.pixelplay.data.database.FavoritesDao
 import com.theveloper.pixelplay.data.database.GDriveDao
 import com.theveloper.pixelplay.data.database.LyricsDao
+import com.theveloper.pixelplay.data.database.AiCacheDao
+import com.theveloper.pixelplay.data.database.AiUsageDao
 import com.theveloper.pixelplay.data.database.LocalPlaylistDao
 import com.theveloper.pixelplay.data.database.MusicDao
 import com.theveloper.pixelplay.data.database.PixelPlayDatabase
@@ -52,7 +55,9 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
 import javax.inject.Qualifier
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -103,6 +108,19 @@ object AppModule {
 
     @Singleton
     @Provides
+    @AppScope
+    fun provideAppCoroutineScope(): CoroutineScope {
+        return CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
+
+    @Singleton
+    @Provides
+    fun provideWorkManager(@ApplicationContext context: Context): WorkManager {
+        return WorkManager.getInstance(context)
+    }
+
+    @Singleton
+    @Provides
     fun providePixelPlayDatabase(@ApplicationContext context: Context): PixelPlayDatabase {
         val builder = Room.databaseBuilder(
             context.applicationContext,
@@ -141,7 +159,13 @@ object AppModule {
             PixelPlayDatabase.MIGRATION_32_33,
             PixelPlayDatabase.MIGRATION_33_34,
             PixelPlayDatabase.MIGRATION_34_35,
-            PixelPlayDatabase.MIGRATION_35_36
+            PixelPlayDatabase.MIGRATION_35_36,
+            PixelPlayDatabase.MIGRATION_36_37,
+            PixelPlayDatabase.MIGRATION_37_38,
+            PixelPlayDatabase.MIGRATION_38_39,
+            PixelPlayDatabase.MIGRATION_39_40,
+            PixelPlayDatabase.MIGRATION_40_41,
+            PixelPlayDatabase.MIGRATION_41_42
         )
             .addCallback(PixelPlayDatabase.createRuntimeArtifactsCallback())
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -221,6 +245,23 @@ object AppModule {
     fun provideNavidromeDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.NavidromeDao {
         return database.navidromeDao()
     }
+    
+    @Singleton
+    @Provides
+    fun provideAiCacheDao(database: PixelPlayDatabase): AiCacheDao {
+        return database.aiCacheDao()
+    }
+
+    @Provides
+    fun provideAiUsageDao(database: PixelPlayDatabase): AiUsageDao {
+        return database.aiUsageDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideJellyfinDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.JellyfinDao {
+        return database.jellyfinDao()
+    }
 
     @Provides
     @Singleton
@@ -252,7 +293,16 @@ object AppModule {
             .allowHardware(true) // Re-enable hardware bitmaps for better performance
             .memoryCache {
                 MemoryCache.Builder(context)
-                    .maxSizePercent(0.20) // Use 20% of app memory for image cache
+                    // Hard 40 MB cap instead of 20%-of-heap. Rationale:
+                    //  - On large-heap devices (Pixel 8 etc.) the percentage
+                    //    expanded to ~80–100 MB, far beyond what an album-art
+                    //    workload needs.
+                    //  - allowHardware(true) keeps most decoded pixels in GPU
+                    //    memory, so the MemoryCache mostly tracks Bitmap
+                    //    references — 40 MB still buffers ~100+ album arts.
+                    //  - Tighter cap = less GC pressure and less thermal
+                    //    headroom spent on memory pressure during long sessions.
+                    .maxSizeBytes(40 * 1024 * 1024)
                     .build()
             }
             .diskCache {
@@ -380,14 +430,25 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
-        val loggingInterceptor = HttpLoggingInterceptor()
-        loggingInterceptor.setLevel(
-            if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BODY
+        val loggingInterceptor = HttpLoggingInterceptor().apply {
+            // HEADERS (not BODY) so we never print response bodies that may contain
+            // cookies, tokens, or third-party API payloads. Headers are still useful
+            // for debugging request paths and status codes.
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.HEADERS
             } else {
                 HttpLoggingInterceptor.Level.NONE
             }
-        )
+            // Redact every header that can carry a credential or session token.
+            redactHeader("Authorization")
+            redactHeader("Proxy-Authorization")
+            redactHeader("Cookie")
+            redactHeader("Set-Cookie")
+            redactHeader("x-goog-api-key")
+            redactHeader("X-Emby-Token")
+            redactHeader("X-Emby-Authorization")
+            redactHeader("X-MediaBrowser-Token")
+        }
         
         // Connection pool with optimized connections for better performance
         val connectionPool = okhttp3.ConnectionPool(

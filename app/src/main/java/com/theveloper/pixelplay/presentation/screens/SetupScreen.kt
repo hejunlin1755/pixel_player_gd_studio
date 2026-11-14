@@ -117,6 +117,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,7 +126,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.core.content.ContextCompat
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -159,6 +160,7 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.text.style.TextOverflow
 
 @OptIn(ExperimentalPermissionsApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -173,6 +175,9 @@ fun SetupScreen(
     val directoryChildren by setupViewModel.currentDirectoryChildren.collectAsStateWithLifecycle()
     val availableStorages by setupViewModel.availableStorages.collectAsStateWithLifecycle()
     val selectedStorageIndex by setupViewModel.selectedStorageIndex.collectAsStateWithLifecycle()
+    val isExplorerPriming by setupViewModel.isExplorerPriming.collectAsStateWithLifecycle()
+    val isExplorerReady by setupViewModel.isExplorerReady.collectAsStateWithLifecycle()
+    val isCurrentDirectoryResolved by setupViewModel.isCurrentDirectoryResolved.collectAsStateWithLifecycle()
     var selectedBackupUri by remember { mutableStateOf<Uri?>(null) }
     
     var showCornerRadiusOverlay by remember { mutableStateOf(false) }
@@ -207,6 +212,14 @@ fun SetupScreen(
     val currentPage = pages[pagerState.currentPage]
     val isNextButtonEnabled = isPermissionGateSatisfied(context, currentPage, uiState)
     var previousPageIndex by remember { mutableStateOf(0) }
+    val navigateToPage: (Int) -> Unit = { targetPage ->
+        scope.launch {
+            val boundedPage = targetPage.coerceIn(0, pages.lastIndex)
+            if (boundedPage != pagerState.currentPage) {
+                pagerState.animateScrollToPage(boundedPage)
+            }
+        }
+    }
 
     val directorySelectionPageIndex = remember(pages) { pages.indexOf(SetupPage.DirectorySelection) }
     val batteryOptimizationPageIndex = remember(pages) { pages.indexOf(SetupPage.BatteryOptimization) }
@@ -250,7 +263,7 @@ fun SetupScreen(
                 setupViewModel.checkPermissions(context)
                 pagerState.scrollToPage(blockedPageIndex)
                 previousPageIndex = blockedPageIndex
-                Toast.makeText(context, "Please grant the required permission first.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.setup_toast_grant_permission_first), Toast.LENGTH_SHORT).show()
                 return@LaunchedEffect
             }
         }
@@ -262,9 +275,7 @@ fun SetupScreen(
     }
     BackHandler {
         if (pagerState.currentPage > 0) {
-            scope.launch {
-                pagerState.animateScrollToPage(pagerState.currentPage - 1)
-            }
+            navigateToPage(pagerState.currentPage - 1)
         }
     }
     Scaffold(
@@ -277,12 +288,10 @@ fun SetupScreen(
                 onNextClicked = {
                     val page = pages[pagerState.currentPage]
                     if (isPermissionGateSatisfied(context, page, uiState)) {
-                        scope.launch {
-                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                        }
+                        navigateToPage(pagerState.currentPage + 1)
                     } else {
                         setupViewModel.checkPermissions(context)
-                        Toast.makeText(context, "Please grant the required permission first.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.setup_toast_grant_permission_first), Toast.LENGTH_SHORT).show()
                     }
                 },
                 onFinishClicked = {
@@ -291,7 +300,7 @@ fun SetupScreen(
                         onSetupComplete()
                     } else {
                         setupViewModel.checkPermissions(context)
-                        Toast.makeText(context, "Please grant all required permissions.", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.setup_toast_grant_all_permissions), Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -299,6 +308,9 @@ fun SetupScreen(
     ) { paddingValues ->
         HorizontalPager(
             state = pagerState,
+            // Keep setup progression deterministic; free swiping was allowing users
+            // to jump across optional pages after the first permission dialog.
+            userScrollEnabled = false,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -327,9 +339,7 @@ fun SetupScreen(
                         onSkip = {
                             setupViewModel.clearRestorePlan()
                             selectedBackupUri = null
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         }
                     )
                     SetupPage.DirectorySelection -> DirectorySelectionPage(
@@ -338,15 +348,18 @@ fun SetupScreen(
                         directoryChildren = directoryChildren,
                         availableStorages = availableStorages,
                         selectedStorageIndex = selectedStorageIndex,
+                        isExplorerPriming = isExplorerPriming,
+                        isExplorerReady = isExplorerReady,
+                        isCurrentDirectoryResolved = isCurrentDirectoryResolved,
                         isAtRoot = setupViewModel.isAtRoot(),
                         explorerRoot = setupViewModel.explorerRoot(),
+                        onOpenExplorer = setupViewModel::openExplorer,
                         onNavigateTo = setupViewModel::loadDirectory,
                         onNavigateUp = setupViewModel::navigateUp,
                         onRefresh = setupViewModel::refreshCurrentDirectory,
+                        onPrimeExplorer = setupViewModel::primeExplorer,
                         onSkip = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         },
                         onToggleAllowed = setupViewModel::toggleDirectoryAllowed,
                         onSelectionFinished = setupViewModel::applyPendingDirectoryRuleChanges,
@@ -359,17 +372,12 @@ fun SetupScreen(
                     SetupPage.AlarmsPermission -> AlarmsPermissionPage(
                         uiState = uiState,
                         onSkip = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         }
                     )
-                    SetupPage.AllFilesPermission -> AllFilesPermissionPage(uiState)
                     SetupPage.BatteryOptimization -> BatteryOptimizationPage(
                         onSkip = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         }
                     )
                     SetupPage.ThemeSelection -> ThemeSelectionPage(
@@ -381,9 +389,7 @@ fun SetupScreen(
                         uiState = uiState,
                         onModeSelected = setupViewModel::setLibraryNavigationMode,
                         onSkip = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         }
                     )
                     SetupPage.NavBarLayout -> NavBarLayoutPage(
@@ -391,9 +397,7 @@ fun SetupScreen(
                         onModeSelected = setupViewModel::setNavBarStyle,
                         onCustomizeRadius = { showCornerRadiusOverlay = true },
                         onSkip = {
-                            scope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
+                            navigateToPage(pagerState.currentPage + 1)
                         }
                     )
                 }
@@ -450,11 +454,16 @@ fun DirectorySelectionPage(
     directoryChildren: List<DirectoryEntry>,
     availableStorages: List<StorageInfo>,
     selectedStorageIndex: Int,
+    isExplorerPriming: Boolean,
+    isExplorerReady: Boolean,
+    isCurrentDirectoryResolved: Boolean,
     isAtRoot: Boolean,
     explorerRoot: File,
+    onOpenExplorer: () -> Unit,
     onNavigateTo: (File) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
+    onPrimeExplorer: () -> Unit,
     onSkip: () -> Unit,
     onToggleAllowed: (File) -> Unit,
     onSelectionFinished: () -> Unit,
@@ -464,19 +473,25 @@ fun DirectorySelectionPage(
     val context = LocalContext.current
 
     val hasMediaPermission = uiState.mediaPermissionGranted
-    val hasAllFilesAccess = Build.VERSION.SDK_INT < Build.VERSION_CODES.R || uiState.allFilesAccessGranted
-    val canOpenDirectoryPicker = hasMediaPermission && hasAllFilesAccess
+    val canOpenDirectoryPicker = hasMediaPermission
+
+    LaunchedEffect(canOpenDirectoryPicker) {
+        if (canOpenDirectoryPicker) {
+            onPrimeExplorer()
+        }
+    }
 
     PermissionPageLayout(
-        title = "Excluded folders",
-        description = "All folders are scanned by default. Pick any locations you want to ignore when building your library.",
-        buttonText = "Choose folders to ignore",
+        title = stringResource(R.string.setup_excluded_folders_title),
+        description = stringResource(R.string.setup_excluded_folders_description),
+        buttonText = stringResource(R.string.setup_choose_folders_ignore),
         buttonEnabled = canOpenDirectoryPicker,
         onGrantClicked = {
             if (canOpenDirectoryPicker) {
                 showDirectoryPicker = true
+                onOpenExplorer()
             } else {
-                Toast.makeText(context, "Grant storage permissions first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.setup_toast_grant_storage_first), Toast.LENGTH_SHORT).show()
             }
         },
         icons = persistentListOf(
@@ -488,13 +503,7 @@ fun DirectorySelectionPage(
         )
     ) {
         TextButton(onClick = onSkip) {
-            Text("Skip for now")
-        }
-    }
-
-    LaunchedEffect(showDirectoryPicker) {
-        if (showDirectoryPicker) {
-            onNavigateTo(explorerRoot)
+            Text(stringResource(R.string.setup_skip_for_now), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 
@@ -505,6 +514,9 @@ fun DirectorySelectionPage(
         availableStorages = availableStorages,
         selectedStorageIndex = selectedStorageIndex,
         isLoading = uiState.isLoadingDirectories,
+        isPriming = isExplorerPriming,
+        isReady = isExplorerReady,
+        isCurrentDirectoryResolved = isCurrentDirectoryResolved,
         isAtRoot = isAtRoot,
         rootDirectory = explorerRoot,
         onNavigateTo = onNavigateTo,
@@ -532,7 +544,6 @@ sealed class SetupPage {
     object ThemeSelection : SetupPage()
     object NotificationsPermission : SetupPage()
     object AlarmsPermission : SetupPage()
-    object AllFilesPermission : SetupPage()
     object LibraryLayout : SetupPage()
     object NavBarLayout : SetupPage()
     object BatteryOptimization : SetupPage()
@@ -545,9 +556,6 @@ private fun buildSetupPages(sdkInt: Int): List<SetupPage> {
         SetupPage.MediaPermission
     )
 
-    if (sdkInt >= Build.VERSION_CODES.R) {
-        pages += SetupPage.AllFilesPermission
-    }
     if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
         pages += SetupPage.NotificationsPermission
     }
@@ -589,11 +597,6 @@ private fun isPermissionGateSatisfied(
         SetupPage.MediaPermission -> {
             uiState.mediaPermissionGranted || hasMediaPermissionNow(context)
         }
-        SetupPage.AllFilesPermission -> {
-            uiState.allFilesAccessGranted ||
-                Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-                Environment.isExternalStorageManager()
-        }
         SetupPage.NotificationsPermission -> {
             uiState.notificationsPermissionGranted ||
                 Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -614,9 +617,7 @@ private fun allRequiredPermissionsGrantedNow(context: Context): Boolean {
                 context,
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
-    val allFilesGranted =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
-    return mediaGranted && notificationsGranted && allFilesGranted
+    return mediaGranted && notificationsGranted
 }
 
 private fun hasMediaPermissionNow(context: Context): Boolean {
@@ -655,14 +656,14 @@ fun WelcomePage() {
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "Welcome to ",
+                text = stringResource(R.string.setup_welcome_prefix),
                 style = ExpTitleTypography.displayLarge.copy(
                     fontSize = 42.sp,
                     lineHeight = 1.1.em
                 ),
             )
             Text(
-                text = "PixelPlayer",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.displayLarge.copy(
                     fontFamily = GoogleSansRounded,
                     fontSize = 46.sp,
@@ -685,12 +686,12 @@ fun WelcomePage() {
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "β",
+                    text = stringResource(R.string.setup_beta_symbol),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Black
                 )
                 Text(
-                    text = "Beta",
+                    text = stringResource(R.string.setup_beta_label),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -752,7 +753,7 @@ fun WelcomePage() {
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "Let's get everything set up for you.", style = MaterialTheme.typography.bodyLarge)
+        Text(text = stringResource(R.string.setup_intro_body), style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -784,10 +785,10 @@ fun MediaPermissionPage(
     }
 
     PermissionPageLayout(
-        title = "Media Permission",
+        title = stringResource(R.string.setup_permission_media_title),
         granted = isGranted,
-        description = "PixelPlayer needs access to your audio files to build your music library.",
-        buttonText = if (isGranted) "Permission Granted" else "Grant Media Permission",
+        description = stringResource(R.string.setup_permission_media_description),
+        buttonText = if (isGranted) stringResource(R.string.setup_permission_granted) else stringResource(R.string.setup_grant_media_permission),
         buttonEnabled = !isGranted,
         icons = mediaIcons,
         onGrantClicked = {
@@ -823,10 +824,10 @@ fun NotificationsPermissionPage(
     }
 
     PermissionPageLayout(
-        title = "Notifications",
+        title = stringResource(R.string.setup_permission_notifications_title),
         granted = isGranted,
-        description = "Enable notifications to control your music from the lock screen and notification shade.",
-        buttonText = if (isGranted) "Permission Granted" else "Enable Notifications",
+        description = stringResource(R.string.setup_permission_notifications_description),
+        buttonText = if (isGranted) stringResource(R.string.setup_permission_granted) else stringResource(R.string.setup_enable_notifications),
         buttonEnabled = !isGranted,
         icons = notificationIcons,
         onGrantClicked = {
@@ -856,10 +857,10 @@ fun AlarmsPermissionPage(
     val isGranted = uiState.alarmsPermissionGranted
 
     PermissionPageLayout(
-        title = "Alarms & Reminders",
+        title = stringResource(R.string.setup_permission_alarms_title),
         granted = isGranted,
-        description = "Optional, but recommended if you use Sleep Timer and want PixelPlayer to stop playback exactly on time.",
-        buttonText = if (isGranted) "Permission Granted" else "Grant Permission",
+        description = stringResource(R.string.setup_permission_alarms_description),
+        buttonText = if (isGranted) stringResource(R.string.setup_permission_granted) else stringResource(R.string.setup_grant_permission_generic),
         buttonEnabled = !isGranted,
         icons = icons,
         onGrantClicked = {
@@ -873,40 +874,10 @@ fun AlarmsPermissionPage(
     ) {
         if (!isGranted) {
             TextButton(onClick = onSkip) {
-                Text("Skip for now")
+                Text(stringResource(R.string.setup_skip_for_now), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
-}
-
-@Composable
-fun AllFilesPermissionPage(uiState: SetupUiState) {
-    val context = LocalContext.current
-    val fileIcons = persistentListOf(
-        R.drawable.rounded_question_mark_24,
-        R.drawable.rounded_attach_file_24,
-        R.drawable.rounded_imagesmode_24,
-        R.drawable.rounded_broken_image_24,
-        R.drawable.rounded_folder_24
-    )
-
-    val isGranted = uiState.allFilesAccessGranted
-
-    PermissionPageLayout(
-        title = "All Files Access",
-        granted = isGranted,
-        description = "For some Android versions, PixelPlayer needs broader file access to find all your music.",
-        buttonText = if(isGranted) "Permission Granted" else "Go to Settings",
-        buttonEnabled = !isGranted,
-        icons = fileIcons,
-        onGrantClicked = {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isGranted) {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                intent.data = "package:${context.packageName}".toUri()
-                context.startActivity(intent)
-            }
-        }
-    )
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -920,12 +891,12 @@ fun BackupRestorePage(
     val progress = uiState.backupTransferProgress
 
     PermissionPageLayout(
-        title = "Do you have a backup?",
-        description = "If you already have a PixelPlayer backup, restore it now and skip most of the remaining setup on this device.",
+        title = stringResource(R.string.setup_backup_have_title),
+        description = stringResource(R.string.setup_backup_have_description),
         buttonText = when {
-            uiState.isInspectingBackup -> "Inspecting backup"
-            uiState.isRestoringBackup -> "Restoring backup"
-            else -> "Import backup"
+            uiState.isInspectingBackup -> stringResource(R.string.setup_inspecting_backup)
+            uiState.isRestoringBackup -> stringResource(R.string.setup_restoring_backup)
+            else -> stringResource(R.string.setup_import_backup)
         },
         buttonEnabled = !isBusy,
         icons = persistentListOf(
@@ -958,7 +929,7 @@ fun BackupRestorePage(
                         ) {
                             LoadingIndicator(modifier = Modifier.size(20.dp))
                             Text(
-                                text = "Checking backup package…",
+                                text = stringResource(R.string.setup_checking_backup),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -989,7 +960,7 @@ fun BackupRestorePage(
             onClick = onSkip,
             enabled = !uiState.isRestoringBackup
         ) {
-            Text("Skip / Not now")
+            Text(stringResource(R.string.setup_skip_for_now), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1008,29 +979,27 @@ fun ThemeSelectionPage(
     uiState: SetupUiState,
     onModeSelected: (String) -> Unit
 ) {
-    val themeOptions = remember {
-        listOf(
-            ThemeOptionItem(
-                mode = AppThemeMode.DARK,
-                title = "Dark",
-                description = "The default Material 3 dark look for PixelPlay.",
-                icon = Icons.Rounded.DarkMode,
-                recommended = true
-            ),
-            ThemeOptionItem(
-                mode = AppThemeMode.LIGHT,
-                title = "Light",
-                description = "A brighter Material 3 look across the app.",
-                icon = Icons.Outlined.LightMode
-            ),
-            ThemeOptionItem(
-                mode = AppThemeMode.FOLLOW_SYSTEM,
-                title = "Follow system",
-                description = "Match your phone's current appearance setting.",
-                icon = Icons.Rounded.PhoneAndroid
-            )
+    val themeOptions = listOf(
+        ThemeOptionItem(
+            mode = AppThemeMode.DARK,
+            title = stringResource(R.string.setup_theme_dark_title),
+            description = stringResource(R.string.setup_theme_dark_description),
+            icon = Icons.Rounded.DarkMode,
+            recommended = true
+        ),
+        ThemeOptionItem(
+            mode = AppThemeMode.LIGHT,
+            title = stringResource(R.string.setup_theme_light_title),
+            description = stringResource(R.string.setup_theme_light_description),
+            icon = Icons.Outlined.LightMode
+        ),
+        ThemeOptionItem(
+            mode = AppThemeMode.FOLLOW_SYSTEM,
+            title = stringResource(R.string.setup_theme_follow_title),
+            description = stringResource(R.string.setup_theme_follow_description),
+            icon = Icons.Rounded.PhoneAndroid
         )
-    }
+    )
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1042,7 +1011,7 @@ fun ThemeSelectionPage(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "App Theme",
+                text = stringResource(R.string.setup_theme_title),
                 style = MaterialTheme.typography.displayMedium.copy(
                     fontFamily = GoogleSansRounded,
                     fontSize = 32.sp
@@ -1051,7 +1020,7 @@ fun ThemeSelectionPage(
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Pick the look you want before you start exploring your library.",
+                text = stringResource(R.string.setup_theme_subtitle),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1071,7 +1040,7 @@ fun ThemeSelectionPage(
             }
 
             Text(
-                text = "You can change this later in Settings > Appearance > App Theme.",
+                text = stringResource(R.string.setup_theme_footer),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -1155,7 +1124,7 @@ private fun ThemeModeOptionCard(
                         shape = RoundedCornerShape(999.dp)
                     ) {
                         Text(
-                            text = "Recommended",
+                            text = stringResource(R.string.setup_recommended),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
@@ -1228,7 +1197,7 @@ fun LibraryLayoutPage(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Library Layout",
+                text = stringResource(R.string.setup_library_layout_title),
                 style = MaterialTheme.typography.displayMedium.copy(
                     fontFamily = GoogleSansRounded,
                     fontSize = 32.sp
@@ -1238,7 +1207,7 @@ fun LibraryLayoutPage(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Choose your preferred way to navigate your library.",
+                text = stringResource(R.string.setup_library_layout_subtitle),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1275,12 +1244,12 @@ fun LibraryLayoutPage(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Compact Mode",
+                            text = stringResource(R.string.setup_compact_mode),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (isCompact) "Using minimal pill navigation" else "Using standard tab row",
+                            text = if (isCompact) stringResource(R.string.setup_compact_mode_pill_hint) else stringResource(R.string.setup_compact_mode_tab_hint),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1297,7 +1266,7 @@ fun LibraryLayoutPage(
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "You can change this later in Settings > Appearance > Library Navigation.",
+                text = stringResource(R.string.setup_library_layout_footer),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -1354,7 +1323,7 @@ fun LibraryHeaderPreview(isCompact: Boolean) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             LibraryNavigationPillSetupShow(
-                                title = "Songs",
+                                title = stringResource(R.string.setup_preview_songs_label),
                                 isExpanded = false,
                                 iconRes = R.drawable.rounded_music_note_24,
                                 pageIndex = 0,
@@ -1371,7 +1340,7 @@ fun LibraryHeaderPreview(isCompact: Boolean) {
                             .padding(top = 24.dp, start = 20.dp, end = 20.dp)
                     ) {
                         Text(
-                            text = "Library",
+                            text = stringResource(R.string.settings_default_tab_library),
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.primary,
@@ -1394,7 +1363,7 @@ fun LibraryHeaderPreview(isCompact: Boolean) {
                                 ) {
                                     Text(
                                         modifier = Modifier.padding(vertical = 10.dp, horizontal = 14.dp),
-                                        text = "SONGS",
+                                        text = stringResource(R.string.setup_tab_songs),
                                         style = MaterialTheme.typography.titleMedium.copy(fontSize = 13.sp),
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
@@ -1422,7 +1391,7 @@ fun LibraryHeaderPreview(isCompact: Boolean) {
                                 ) {
                                     Text(
                                         modifier = Modifier.padding(vertical = 10.dp, horizontal = 14.dp),
-                                        text = "ALBUMS",
+                                        text = stringResource(R.string.setup_tab_albums),
                                         style = MaterialTheme.typography.titleMedium.copy(fontSize = 13.sp),
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1450,7 +1419,7 @@ fun LibraryHeaderPreview(isCompact: Boolean) {
                                 ) {
                                     Text(
                                         modifier = Modifier.padding(vertical = 10.dp, horizontal = 14.dp),
-                                        text = "ARTISTS",
+                                        text = stringResource(R.string.setup_tab_artists),
                                         style = MaterialTheme.typography.titleMedium.copy(fontSize = 13.sp),
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1511,10 +1480,10 @@ fun BatteryOptimizationPage(
     )
 
     PermissionPageLayout(
-        title = "Battery Optimization",
+        title = stringResource(R.string.setup_battery_optimization_title),
         granted = isIgnoringBatteryOptimizations,
-        description = "Some Android devices aggressively kill background apps. Disable battery optimization for PixelPlayer to prevent unexpected playback interruptions.",
-        buttonText = if (isIgnoringBatteryOptimizations) "Permission Granted" else "Disable Optimization",
+        description = stringResource(R.string.setup_battery_optimization_description),
+        buttonText = if (isIgnoringBatteryOptimizations) stringResource(R.string.setup_permission_granted) else stringResource(R.string.setup_disable_battery_optimization),
         buttonEnabled = !isIgnoringBatteryOptimizations,
         icons = batteryIcons,
         onGrantClicked = {
@@ -1530,7 +1499,7 @@ fun BatteryOptimizationPage(
                         val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                         context.startActivity(fallbackIntent)
                     } catch (e2: Exception) {
-                        Toast.makeText(context, "Could not open battery settings", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.settings_toast_battery_settings_unavailable), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -1538,7 +1507,7 @@ fun BatteryOptimizationPage(
     ) {
         if (!isIgnoringBatteryOptimizations) {
             TextButton(onClick = onSkip) {
-                Text("Skip for now")
+                Text(stringResource(R.string.setup_skip_for_now), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1561,14 +1530,14 @@ fun FinishPage() {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(text = "All Set!", style = MaterialTheme.typography.headlineLarge)
+        Text(text = stringResource(R.string.setup_all_set_title), style = MaterialTheme.typography.headlineLarge)
         Spacer(modifier = Modifier.height(16.dp))
         PermissionIconCollage(
             modifier = Modifier.height(230.dp),
             icons = finishIcons
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "You're ready to enjoy your music.", style = MaterialTheme.typography.bodyLarge)
+        Text(text = stringResource(R.string.setup_all_set_body), style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -1662,6 +1631,8 @@ private fun SetupRestoreDialog(
     onSelectionChanged: (Set<BackupSection>) -> Unit,
     onConfirm: () -> Unit
 ) {
+    val context = LocalContext.current
+    val unknownVersion = stringResource(R.string.setup_backup_unknown_version)
     val dateText = remember(plan.manifest.createdAt) {
         SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault())
             .format(Date(plan.manifest.createdAt))
@@ -1705,7 +1676,7 @@ private fun SetupRestoreDialog(
                                 enabled = !inProgress,
                                 modifier = Modifier.height(52.dp)
                             ) {
-                                Text("Cancel")
+                                Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Button(
                                 onClick = onConfirm,
@@ -1717,11 +1688,11 @@ private fun SetupRestoreDialog(
                                 if (inProgress) {
                                     LoadingIndicator(modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Restoring")
+                                    Text(stringResource(R.string.setup_restoring))
                                 } else {
                                     Icon(Icons.Rounded.Restore, contentDescription = null)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Restore selected")
+                                    Text(stringResource(R.string.setup_restore_selected))
                                 }
                             }
                         }
@@ -1736,14 +1707,14 @@ private fun SetupRestoreDialog(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Restore Backup",
+                        text = stringResource(R.string.setup_restore_backup_title),
                         style = MaterialTheme.typography.displaySmall.copy(
                             fontFamily = GoogleSansRounded
                         ),
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Review what you want to import before finishing setup.",
+                        text = stringResource(R.string.setup_restore_backup_subtitle),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1758,18 +1729,25 @@ private fun SetupRestoreDialog(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "${plan.selectedModules.size} of ${plan.availableModules.size} modules selected",
+                                text = stringResource(
+                                    R.string.setup_modules_selected_format,
+                                    plan.selectedModules.size,
+                                    plan.availableModules.size
+                                ),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "Created $dateText",
+                                text = stringResource(R.string.setup_backup_created_format, dateText),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "Backup from ${plan.manifest.appVersion.ifEmpty { "Unknown version" }}",
+                                text = stringResource(
+                                    R.string.setup_backup_from_version,
+                                    plan.manifest.appVersion.ifEmpty { unknownVersion }
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2042,7 +2020,7 @@ fun LibraryNavigationPillSetupShow(
                 Icon(
                     modifier = Modifier.rotate(arrowRotation),
                     imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "Expandir menú",
+                    contentDescription = stringResource(R.string.common_expand_menu),
                     tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
@@ -2148,14 +2126,18 @@ fun SetupBottomBar(
                 ) { targetPage ->
                     if (targetPage == 0) {
                         Text(
-                            text = "Let's Go!",
+                            text = stringResource(R.string.setup_lets_go),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
                         )
                     } else {
                         Text(
-                            text = "Step ${targetPage} of ${pagerState.pageCount - 1}",
+                            text = stringResource(
+                                R.string.setup_step_format,
+                                targetPage,
+                                pagerState.pageCount - 1
+                            ),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2208,12 +2190,12 @@ fun SetupBottomBar(
                         label = "AnimatedFabIcon"
                     ) { isNextPage ->
                         if (isNextPage) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = "Siguiente")
+                            Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = stringResource(R.string.common_next))
                         } else {
                             if (isFinishButtonEnabled) {
-                                Icon(Icons.Rounded.Check, contentDescription = "Finalizar")
+                                Icon(Icons.Rounded.Check, contentDescription = stringResource(R.string.common_finish))
                             } else {
-                                Icon(Icons.Rounded.Close, contentDescription = "Finalizar")
+                                Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.common_close))
                             }
                         }
                     }
@@ -2245,7 +2227,7 @@ fun NavBarLayoutPage(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "App Navigation",
+                text = stringResource(R.string.setup_app_navigation_title),
                 style = MaterialTheme.typography.displayMedium.copy(
                     fontFamily = GoogleSansRounded,
                     fontSize = 32.sp
@@ -2255,7 +2237,7 @@ fun NavBarLayoutPage(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Choose the style of the bottom navigation bar.",
+                text = stringResource(R.string.setup_app_navigation_subtitle),
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2295,12 +2277,12 @@ fun NavBarLayoutPage(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Default Style",
+                                text = stringResource(R.string.setup_navbar_default_style),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (isDefault) "Floating pill with rounded corners" else "Standard full-width bar",
+                                text = if (isDefault) stringResource(R.string.setup_nav_floating_pill_description) else stringResource(R.string.setup_nav_full_width_description),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2330,7 +2312,7 @@ fun NavBarLayoutPage(
                              ) {
                                  Icon(Icons.Rounded.RoundedCorner, contentDescription = null, modifier = Modifier.size(18.dp))
                                  Spacer(modifier = Modifier.width(8.dp))
-                                 Text("Customize Corner Radius")
+                                 Text(stringResource(R.string.setup_customize_corner_radius))
                              }
                          }
                     }
@@ -2340,7 +2322,7 @@ fun NavBarLayoutPage(
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "You can change this later in Settings > Appearance > Navbar Style.",
+                text = stringResource(R.string.setup_navbar_footer),
                 style = MaterialTheme.typography.labelMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -68,15 +69,18 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
 import com.theveloper.pixelplay.presentation.netease.auth.NeteaseLoginActivity
+import com.theveloper.pixelplay.presentation.jellyfin.auth.JellyfinLoginActivity
 import com.theveloper.pixelplay.presentation.navidrome.auth.NavidromeLoginActivity
 import com.theveloper.pixelplay.presentation.qqmusic.auth.QqMusicLoginActivity
 import com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity
@@ -93,6 +97,7 @@ fun AccountsScreen(
     onOpenNeteaseDashboard: () -> Unit = {},
     onOpenQqMusicDashboard: () -> Unit = {},
     onOpenNavidromeDashboard: () -> Unit = {},
+    onOpenJellyfinDashboard: () -> Unit = {},
     viewModel: AccountsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -186,7 +191,7 @@ fun AccountsScreen(
             if (uiState.connectedAccounts.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Linked Services",
+                        text = stringResource(R.string.accounts_linked_services),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -207,6 +212,7 @@ fun AccountsScreen(
                                 onOpenNeteaseDashboard = onOpenNeteaseDashboard,
                                 onOpenQqMusicDashboard = onOpenQqMusicDashboard,
                                 onOpenNavidromeDashboard = onOpenNavidromeDashboard,
+                                onOpenJellyfinDashboard = onOpenJellyfinDashboard,
                                 preferNeteaseDashboard = true
                             )
                         },
@@ -217,6 +223,10 @@ fun AccountsScreen(
                             painterResource(R.drawable.qq_music)
                         } else if (account.service == ExternalServiceAccount.TELEGRAM) {
                             painterResource(R.drawable.telegram)
+                        } else if (account.service == ExternalServiceAccount.JELLYFIN) {
+                            painterResource(R.drawable.ic_jellyfin)
+                        } else if (account.service == ExternalServiceAccount.NAVIDROME) {
+                            painterResource(R.drawable.ic_navidrome_md3)
                         } else null
                     )
                 }
@@ -231,6 +241,7 @@ fun AccountsScreen(
                                 onOpenNeteaseDashboard = onOpenNeteaseDashboard,
                                 onOpenQqMusicDashboard = onOpenQqMusicDashboard,
                                 onOpenNavidromeDashboard = onOpenNavidromeDashboard,
+                                onOpenJellyfinDashboard = onOpenJellyfinDashboard,
                                 preferNeteaseDashboard = false
                             )
                         }
@@ -240,7 +251,7 @@ fun AccountsScreen(
         }
 
         CollapsibleCommonTopBar(
-            title = "Accounts",
+            title = stringResource(R.string.settings_category_accounts_title),
             collapseFraction = collapseFraction,
             headerHeight = currentTopBarHeightDp,
             onBackClick = onBackClick,
@@ -255,6 +266,10 @@ private fun AccountsHeroSection(
     connectedCount: Int,
     disconnectedCount: Int
 ) {
+    val connectedHeroTitle = stringResource(R.string.accounts_connected_title)
+    val connectedHeroBody = stringResource(R.string.accounts_connected_subtitle)
+    val statActive = stringResource(R.string.accounts_stat_active)
+    val statAvailable = stringResource(R.string.accounts_stat_available)
     val sectionShape = AbsoluteSmoothCornerShape(30.dp, 60)
     Card(
         shape = sectionShape,
@@ -267,13 +282,13 @@ private fun AccountsHeroSection(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Connected Accounts",
+                text = connectedHeroTitle,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Manage linked providers and keep each integration under your control.",
+                text = connectedHeroBody,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -282,12 +297,12 @@ private fun AccountsHeroSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 HeroStatTile(
-                    title = "Active",
+                    title = statActive,
                     value = connectedCount.toString(),
                     modifier = Modifier.weight(1f)
                 )
                 HeroStatTile(
-                    title = "Available",
+                    title = statAvailable,
                     value = (connectedCount + disconnectedCount).toString(),
                     modifier = Modifier.weight(1f)
                 )
@@ -333,6 +348,12 @@ private fun ConnectedAccountCard(
     onLogout: () -> Unit,
     painter: androidx.compose.ui.graphics.painter.Painter? = null
 ) {
+    val statusSoon = stringResource(R.string.accounts_status_soon)
+    val statusConnected = stringResource(R.string.accounts_status_connected)
+    val openService = stringResource(R.string.accounts_action_open_service)
+    val comingSoonShort = stringResource(R.string.accounts_action_coming_soon)
+    val loggingOut = stringResource(R.string.accounts_logging_out_status)
+    val logOut = stringResource(R.string.cloud_cd_logout)
     val palette = servicePalette(account.service)
     val isComingSoon = account.service == ExternalServiceAccount.GOOGLE_DRIVE
     val cardShape = AbsoluteSmoothCornerShape(28.dp, 60)
@@ -390,10 +411,10 @@ private fun ConnectedAccountCard(
     Column(modifier = Modifier.weight(1f)) {
         Text(
             text = account.title,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
         Text(
@@ -414,7 +435,7 @@ private fun ConnectedAccountCard(
         }
     ) {
         Text(
-            text = if (isComingSoon) "Soon" else "Connected",
+            text = if (isComingSoon) statusSoon else statusConnected,
             style = MaterialTheme.typography.labelMedium,
             color = if (isComingSoon) {
                 MaterialTheme.colorScheme.onSecondaryContainer
@@ -470,7 +491,7 @@ private fun ConnectedAccountCard(
                 )
                 Spacer(modifier = Modifier.size(8.dp))
                 Text(
-                    text = if (isComingSoon) "Coming soon" else "Open Service",
+                    text = if (isComingSoon) comingSoonShort else openService,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -495,7 +516,7 @@ private fun ConnectedAccountCard(
                 }
                 Spacer(modifier = Modifier.size(8.dp))
                 Text(
-                    text = if (account.isLoggingOut) "Logging out..." else "Log out",
+                    text = if (account.isLoggingOut) loggingOut else logOut,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -508,6 +529,10 @@ private fun EmptyAccountsCard(
     disconnectedServices: List<ExternalServiceAccount>,
     onConnect: (ExternalServiceAccount) -> Unit
 ) {
+    val noLinkedTitle = stringResource(R.string.accounts_no_linked_title)
+    val noLinkedBody = stringResource(R.string.accounts_no_linked_subtitle)
+    val connectTemplate = stringResource(R.string.accounts_connect_service)
+    val serviceSoonTemplate = stringResource(R.string.accounts_service_coming_soon)
     Card(
         shape = AbsoluteSmoothCornerShape(28.dp, 60),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
@@ -519,12 +544,12 @@ private fun EmptyAccountsCard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "No linked accounts yet",
+                text = noLinkedTitle,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Connect a provider to manage it from this screen.",
+                text = noLinkedBody,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -535,7 +560,9 @@ private fun EmptyAccountsCard(
                     ExternalServiceAccount.NETEASE -> painterResource(R.drawable.netease_cloud_music_logo_icon_206716__1_)
                     ExternalServiceAccount.QQ_MUSIC -> painterResource(R.drawable.qq_music)
                     ExternalServiceAccount.TELEGRAM -> painterResource(R.drawable.telegram)
-                    else -> null
+                    ExternalServiceAccount.GOOGLE_DRIVE -> painterResource(R.drawable.rounded_drive_export_24)
+                    ExternalServiceAccount.JELLYFIN -> painterResource(R.drawable.ic_jellyfin)
+                    ExternalServiceAccount.NAVIDROME -> painterResource(R.drawable.ic_navidrome_md3)
                 }
                 FilledTonalButton(
                     onClick = { if (!isComingSoon) onConnect(service) },
@@ -545,27 +572,22 @@ private fun EmptyAccountsCard(
                         disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                         disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 ) {
-                    if (painter != null) {
-                        Icon(
-                            painter = painter,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Rounded.Link,
-                            contentDescription = null
-                        )
-                    }
+                    Icon(
+                        painter = painter,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text(
+                    TightWrapText(
                         text = if (isComingSoon) {
-                            "${serviceTitle(service)} (Coming soon)"
+                            serviceSoonTemplate.format(serviceDisplayName(service))
                         } else {
-                            "Connect ${serviceTitle(service)}"
-                        }
+                            connectTemplate.format(serviceDisplayName(service))
+                        },
+                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
                     )
                 }
             }
@@ -625,6 +647,14 @@ private fun servicePalette(service: ExternalServiceAccount): ServicePalette {
             primaryActionContainer = Color(0xFFE3F2FD),
             primaryActionTint = Color(0xFF1565C0)
         )
+        ExternalServiceAccount.JELLYFIN -> ServicePalette(
+            iconContainer = Color(0xFF00A4DC),
+            iconTint = Color.White,
+            statusContainer = Color(0xFFE1F5FE),
+            statusTint = Color(0xFF0277BD),
+            primaryActionContainer = Color(0xFFE3F2FD),
+            primaryActionTint = Color(0xFF1565C0)
+        )
     }
 }
 
@@ -635,6 +665,7 @@ private fun accountIcon(service: ExternalServiceAccount): ImageVector {
         ExternalServiceAccount.NETEASE -> Icons.Rounded.MusicNote
         ExternalServiceAccount.QQ_MUSIC -> Icons.Rounded.MusicNote
         ExternalServiceAccount.NAVIDROME -> Icons.Rounded.CloudQueue
+        ExternalServiceAccount.JELLYFIN -> Icons.Rounded.CloudQueue
     }
 }
 
@@ -664,6 +695,13 @@ private fun ServiceIcon(service: ExternalServiceAccount, tint: Color, modifier: 
                     .offset(x = 16.dp) // Closer overlap offset (was 24dp)
             )
         }
+    } else if (service == ExternalServiceAccount.JELLYFIN) {
+        Icon(
+            painter = painterResource(R.drawable.ic_jellyfin),
+            contentDescription = null,
+            tint = tint,
+            modifier = modifier
+        )
     } else {
         Icon(
             imageVector = accountIcon(service),
@@ -674,13 +712,15 @@ private fun ServiceIcon(service: ExternalServiceAccount, tint: Color, modifier: 
     }
 }
 
-private fun serviceTitle(service: ExternalServiceAccount): String {
+@Composable
+private fun serviceDisplayName(service: ExternalServiceAccount): String {
     return when (service) {
-        ExternalServiceAccount.TELEGRAM -> "Telegram"
-        ExternalServiceAccount.GOOGLE_DRIVE -> "Google Drive"
-        ExternalServiceAccount.NETEASE -> "Netease"
-        ExternalServiceAccount.QQ_MUSIC -> "QQ Music"
-        ExternalServiceAccount.NAVIDROME -> "Subsonic"
+        ExternalServiceAccount.TELEGRAM -> stringResource(R.string.auth_telegram_title)
+        ExternalServiceAccount.GOOGLE_DRIVE -> stringResource(R.string.auth_gdrive_title)
+        ExternalServiceAccount.NETEASE -> stringResource(R.string.auth_netease_title)
+        ExternalServiceAccount.QQ_MUSIC -> stringResource(R.string.auth_qq_title)
+        ExternalServiceAccount.NAVIDROME -> stringResource(R.string.auth_subsonic_title)
+        ExternalServiceAccount.JELLYFIN -> stringResource(R.string.auth_jellyfin_title)
     }
 }
 
@@ -690,6 +730,7 @@ private fun openService(
     onOpenNeteaseDashboard: () -> Unit,
     onOpenQqMusicDashboard: () -> Unit,
     onOpenNavidromeDashboard: () -> Unit,
+    onOpenJellyfinDashboard: () -> Unit,
     preferNeteaseDashboard: Boolean
 ) {
     when (service) {
@@ -700,7 +741,7 @@ private fun openService(
             )
         }
         ExternalServiceAccount.GOOGLE_DRIVE -> {
-            Toast.makeText(context, "Google Drive is coming soon.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.accounts_google_drive_soon), Toast.LENGTH_SHORT).show()
         }
         ExternalServiceAccount.NETEASE -> {
             if (preferNeteaseDashboard) {
@@ -732,6 +773,16 @@ private fun openService(
                 )
             }
         }
+        ExternalServiceAccount.JELLYFIN -> {
+            if (preferNeteaseDashboard) {
+                onOpenJellyfinDashboard()
+            } else {
+                safeStartActivity(
+                    context = context,
+                    intent = Intent(context, JellyfinLoginActivity::class.java)
+                )
+            }
+        }
     }
 }
 
@@ -741,6 +792,6 @@ private fun safeStartActivity(
 ) {
     runCatching { context.startActivity(intent) }
         .onFailure {
-            Toast.makeText(context, "Unable to open this screen right now.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.accounts_unable_open_screen), Toast.LENGTH_SHORT).show()
         }
 }

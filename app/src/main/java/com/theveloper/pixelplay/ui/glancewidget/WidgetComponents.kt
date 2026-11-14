@@ -3,11 +3,11 @@ package com.theveloper.pixelplay.ui.glancewidget
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.glance.ColorFilter
+import androidx.glance.LocalContext
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.Image
@@ -86,13 +86,15 @@ fun AlbumArtImage(
         bitmap?.let { ImageProvider(it) }
     }
 
+    val cdAlbumArt = context.getString(R.string.widget_album_art)
+    val cdPlaceholder = context.getString(R.string.widget_album_art_placeholder)
     Box(
         modifier = modifier
     ) {
         if (imageProvider != null) {
             Image(
                 provider = imageProvider,
-                contentDescription = "Album Art",
+                contentDescription = cdAlbumArt,
                 modifier = GlanceModifier
                     .fillMaxSize()
                     .cornerRadius(cornerRadius),
@@ -109,7 +111,7 @@ fun AlbumArtImage(
             ) {
                 Image(
                     provider = ImageProvider(R.drawable.ic_music_placeholder),
-                    contentDescription = "Placeholder",
+                    contentDescription = cdPlaceholder,
                     modifier = GlanceModifier.size(size * 0.6f),
                     contentScale = ContentScale.Fit,
                     colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurfaceVariant)
@@ -124,37 +126,15 @@ private fun decodeAlbumArtFromUri(
     rawUri: String,
     requestedSize: Dp,
 ): Bitmap? {
-    return try {
-        val uri = Uri.parse(rawUri)
-        val targetPx = (requestedSize.value * context.resources.displayMetrics.density)
-            .toInt()
-            .coerceAtLeast(64)
-
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, bounds)
-        } ?: return null
-
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-        var inSampleSize = 1
-        while (bounds.outWidth / inSampleSize > targetPx * 2 ||
-            bounds.outHeight / inSampleSize > targetPx * 2
-        ) {
-            inSampleSize *= 2
-        }
-
-        val decodeOptions = BitmapFactory.Options().apply {
-            this.inSampleSize = inSampleSize
-            inJustDecodeBounds = false
-        }
-
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, decodeOptions)
-        }
-    } catch (_: Exception) {
-        null
-    }
+    val targetPx = (requestedSize.value * context.resources.displayMetrics.density)
+        .toInt()
+        .coerceAtLeast(64)
+    return decodeWidgetAlbumArtBitmap(
+        context = context,
+        rawUri = rawUri,
+        targetWidthPx = targetPx,
+        targetHeightPx = targetPx,
+    )
 }
 
 @Composable
@@ -193,14 +173,15 @@ fun PreviousButton(
     cornerRadius: Dp,
     iconSize: Dp = 20.dp
 ) {
+    val context = LocalContext.current
     val params = actionParametersOf(PlayerActions.key to PlayerActions.PREVIOUS)
     WidgetIconButton(
         modifier = modifier,
         action = actionRunCallback<PlayerControlActionCallback>(params),
         backgroundColor = backgroundColor,
         iconColor = iconColor,
-        imageProvider = ImageProvider(R.drawable.rounded_skip_previous_24),
-        contentDescription = "Previous",
+        imageProvider = ImageProvider(R.drawable.rounded_skip_previous_filled_24),
+        contentDescription = context.getString(R.string.common_previous_track),
         iconSize = iconSize,
         cornerRadius = cornerRadius
     )
@@ -214,14 +195,15 @@ fun NextButton(
     cornerRadius: Dp,
     iconSize: Dp = 20.dp
 ) {
+    val context = LocalContext.current
     val params = actionParametersOf(PlayerActions.key to PlayerActions.NEXT)
     WidgetIconButton(
         modifier = modifier,
         action = actionRunCallback<PlayerControlActionCallback>(params),
         backgroundColor = backgroundColor,
         iconColor = iconColor,
-        imageProvider = ImageProvider(R.drawable.rounded_skip_next_24),
-        contentDescription = "Next",
+        imageProvider = ImageProvider(R.drawable.rounded_skip_next_filled_24),
+        contentDescription = context.getString(R.string.common_next_track),
         iconSize = iconSize,
         cornerRadius = cornerRadius
     )
@@ -236,6 +218,7 @@ fun PlayPauseButton(
     cornerRadius: Dp,
     iconSize: Dp = 22.dp
 ) {
+    val context = LocalContext.current
     val params = actionParametersOf(PlayerActions.key to PlayerActions.PLAY_PAUSE)
     WidgetIconButton(
         modifier = modifier,
@@ -243,10 +226,12 @@ fun PlayPauseButton(
         backgroundColor = backgroundColor,
         iconColor = iconColor,
         imageProvider = ImageProvider(
-            if (isPlaying) R.drawable.rounded_pause_24
-            else R.drawable.rounded_play_arrow_24
+            if (isPlaying) R.drawable.rounded_pause_filled_24
+            else R.drawable.rounded_play_arrow_filled_24
         ),
-        contentDescription = if (isPlaying) "Pause" else "Play",
+        contentDescription = context.getString(
+            if (isPlaying) R.string.common_pause else R.string.common_play
+        ),
         iconSize = iconSize,
         cornerRadius = cornerRadius
     )
@@ -259,6 +244,7 @@ fun ShuffleButton(
     iconColor: ColorProvider,
     cornerRadius: Dp
 ) {
+    val context = LocalContext.current
     val params = actionParametersOf(PlayerActions.key to PlayerActions.SHUFFLE)
     WidgetIconButton(
         modifier = modifier,
@@ -266,7 +252,7 @@ fun ShuffleButton(
         backgroundColor = backgroundColor,
         iconColor = iconColor,
         imageProvider = ImageProvider(R.drawable.rounded_shuffle_24),
-        contentDescription = "Shuffle",
+        contentDescription = context.getString(R.string.common_shuffle),
         cornerRadius = cornerRadius
     )
 }
@@ -279,6 +265,7 @@ fun RepeatButton(
     iconColor: ColorProvider,
     cornerRadius: Dp
 ) {
+    val context = LocalContext.current
     val params = actionParametersOf(PlayerActions.key to PlayerActions.REPEAT)
     WidgetIconButton(
         modifier = modifier,
@@ -286,7 +273,7 @@ fun RepeatButton(
         backgroundColor = backgroundColor,
         iconColor = iconColor,
         imageProvider = ImageProvider(iconRes),
-        contentDescription = "Repeat",
+        contentDescription = context.getString(R.string.common_repeat),
         cornerRadius = cornerRadius
     )
 }

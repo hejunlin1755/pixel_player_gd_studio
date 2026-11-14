@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
 import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+import com.theveloper.pixelplay.presentation.navigation.navigateSafelyReplacing
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,8 +12,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -84,8 +88,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -95,23 +102,28 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.HapticFeedbackConstantsCompat
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
 import coil.size.Size
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
-import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
 import com.theveloper.pixelplay.presentation.components.QueuePlaylistSongItem
 import com.theveloper.pixelplay.presentation.components.SongPickerBottomSheet
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
+import com.theveloper.pixelplay.ui.theme.LocalShowScrollbar
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
+import com.theveloper.pixelplay.presentation.components.resolveNavBarOccupiedHeight
+import com.theveloper.pixelplay.presentation.components.subcomps.TightWrapText
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
@@ -120,6 +132,7 @@ import com.theveloper.pixelplay.presentation.utils.LocalAppHapticsConfig
 import com.theveloper.pixelplay.presentation.utils.performAppCompatHapticFeedback
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistSongsOrderMode
+import com.theveloper.pixelplay.utils.formatSongCount
 import com.theveloper.pixelplay.utils.formatTotalDuration
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import sh.calvin.reorderable.ReorderableItem
@@ -146,6 +159,31 @@ fun PlaylistDetailScreen(
     val uiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
     val playerStableState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val fallbackPlaylistName = stringResource(R.string.common_playlist)
+    val sortSongsLabel = stringResource(R.string.playlist_sort_songs_title)
+    val moreOptionsLabel = stringResource(R.string.playlist_more_options_title)
+    val playItLabel = stringResource(R.string.playlist_action_play_it)
+    val shuffleLabel = stringResource(R.string.common_shuffle)
+    val addSongsCd = stringResource(R.string.playlist_cd_add_songs)
+    val addLabel = stringResource(R.string.playlist_action_add_songs)
+    val removeLabel = stringResource(R.string.playlist_action_remove_songs)
+    val removeSongsCd = stringResource(R.string.playlist_cd_remove_songs)
+    val reorderLabel = stringResource(R.string.playlist_action_reorder_songs)
+    val reorderSongsCd = stringResource(R.string.playlist_cd_reorder_songs)
+    val reorderSongCd = stringResource(R.string.playlist_cd_reorder_songs)
+    val playlistEmptyTitle = stringResource(R.string.playlist_empty_title)
+    val playlistEmptyFolder = stringResource(R.string.playlist_empty_folder_label)
+    val playlistEmptyAddHint = stringResource(R.string.playlist_empty_add_hint)
+    val playlistOptionsTitle = stringResource(R.string.playlist_options_title)
+    val editPlaylistLabel = stringResource(R.string.playlist_action_edit_playlist)
+    val deletePlaylistLabel = stringResource(R.string.playlist_action_delete_playlist)
+    val setDefaultTransitionLabel = stringResource(R.string.playlist_action_set_default_transition)
+    val exportPlaylistLabel = stringResource(R.string.playlist_action_export_playlist)
+    val deletePlaylistConfirmTitle = stringResource(R.string.playlist_dialog_delete_title)
+    val deletePlaylistConfirmBody = stringResource(R.string.playlist_dialog_delete_body)
+    val sortSheetTitle = stringResource(R.string.playlist_sort_songs_title)
+    val toastAddedToQueue = stringResource(R.string.library_toast_added_to_queue)
+    val toastPlayingNext = stringResource(R.string.library_toast_playing_next)
     val currentPlaylist = uiState.currentPlaylistDetails
     val isFolderPlaylist = currentPlaylist?.id?.startsWith(FOLDER_PLAYLIST_PREFIX) == true
     val songsInPlaylist = uiState.currentPlaylistSongs
@@ -182,7 +220,8 @@ fun PlaylistDetailScreen(
         }
     }
     val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomBarHeightDp = NavBarContentHeight + systemNavBarInset
+    val navBarCompactMode by playerViewModel.navBarCompactMode.collectAsStateWithLifecycle()
+    val bottomBarHeightDp = resolveNavBarOccupiedHeight(systemNavBarInset, navBarCompactMode)
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
     var localReorderableSongs by remember(songsInPlaylist) { mutableStateOf(songsInPlaylist) }
 
@@ -229,7 +268,7 @@ fun PlaylistDetailScreen(
                 title = {
                     Text(
                         modifier = Modifier.padding(start = 8.dp),
-                        text = currentPlaylist?.name ?: "Playlist",
+                        text = currentPlaylist?.name ?: fallbackPlaylistName,
                         fontFamily = GoogleSansRounded,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -242,11 +281,11 @@ fun PlaylistDetailScreen(
                 subtitle = {
                     Text(
                         modifier = Modifier.padding(start = 8.dp),
-                        text = "${songsInPlaylist.size} songs • ${
-                            formatTotalDuration(
-                                songsInPlaylist
-                            )
-                        }",
+                        text = stringResource(
+                            R.string.playlist_song_duration_line,
+                            formatSongCount(songsInPlaylist.size),
+                            formatTotalDuration(songsInPlaylist)
+                        ),
                         style = MaterialTheme.typography.labelMedium.copy(fontFamily = GoogleSansRounded),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -260,7 +299,7 @@ fun PlaylistDetailScreen(
                         ),
                         onClick = onBackClick
                     ) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Volver")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -271,7 +310,7 @@ fun PlaylistDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.Sort,
-                            contentDescription = "Sort Songs"
+                            contentDescription = sortSongsLabel
                         )
                     }
                     if (!isFolderPlaylist) {
@@ -282,7 +321,7 @@ fun PlaylistDetailScreen(
                                 contentColor = MaterialTheme.colorScheme.onSurface
                             ),
                             onClick = { showPlaylistOptionsSheet = true }
-                        ) { Icon(Icons.Filled.MoreVert, "More Options") }
+                        ) { Icon(Icons.Filled.MoreVert, moreOptionsLabel) }
                     }
                 },
                 scrollBehavior = scrollBehavior
@@ -347,15 +386,22 @@ fun PlaylistDetailScreen(
                             smoothnessAsPercentBR = 60,
                             cornerRadiusBR = 14.dp,
                             smoothnessAsPercentBL = 60
-                        )
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                     ) {
                         Icon(
                             Icons.Rounded.PlayArrow,
-                            contentDescription = "Play",
+                            contentDescription = stringResource(R.string.common_play),
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                        Text("Play it")
+                        TightWrapText(
+                                text = playItLabel,
+                                modifier = Modifier.padding(end = 4.dp),
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 2,
+                                lineHeight = 20.sp
+                            )
                     }
                     FilledTonalButton(
                         onClick = {
@@ -381,15 +427,22 @@ fun PlaylistDetailScreen(
                             smoothnessAsPercentBR = 60,
                             cornerRadiusBR = 60.dp,
                             smoothnessAsPercentBL = 60
-                        )
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                     ) {
                         Icon(
                             Icons.Rounded.Shuffle,
-                            contentDescription = "Shuffle",
+                            contentDescription = shuffleLabel,
                             modifier = Modifier.size(ButtonDefaults.IconSize)
                         )
                         Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                        Text("Shuffle")
+                        TightWrapText(
+                                text = shuffleLabel,
+                                modifier = Modifier.padding(end = 4.dp),
+                                overflow = TextOverflow.Ellipsis,
+                                maxLines = 2,
+                                lineHeight = 20.sp
+                            )
                     }
                 }
 
@@ -436,78 +489,171 @@ fun PlaylistDetailScreen(
                                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                             ),
                             modifier = Modifier
-                                .weight(0.75f)
                                 .height(actionButtonsHeight)
                                 .animateContentSize()
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Add,
-                                contentDescription = "Add songs",
+                                contentDescription = addSongsCd,
                                 modifier = Modifier.size(20.dp)
                             )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                text = "Add",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-
-                        Button(
-                            onClick = { isRemoveModeEnabled = !isRemoveModeEnabled },
-                            shape = RoundedCornerShape(removeCornerRadius),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = removeButtonColor,
-                                contentColor = removeIconColor
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(actionButtonsHeight)
-                                .animateContentSize()
-                                .clip(RoundedCornerShape(removeCornerRadius))
-                        ) {
-                            Icon(
-                                modifier = Modifier.size(18.dp),
-                                imageVector = Icons.Default.RemoveCircleOutline,
-                                contentDescription = "Remove songs",
-                                tint = removeIconColor
-                            )
                             Spacer(Modifier.width(6.dp))
                             Text(
                                 modifier = Modifier.padding(end = 4.dp),
-                                text = "Remove",
-                                color = removeIconColor,
-                                style = MaterialTheme.typography.labelMedium
+                                text = addLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
 
-                        Button(
-                            onClick = { isReorderModeEnabled = !isReorderModeEnabled },
-                            shape = RoundedCornerShape(reorderCornerRadius),
-                            contentPadding = PaddingValues(horizontal = 8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = reorderButtonColor,
-                                contentColor = reorderIconColor
-                            ),
+                        val scrollState = rememberScrollState()
+                        val showStartFade by remember { derivedStateOf { scrollState.value > 0 } }
+                        val showEndFade by remember { derivedStateOf { scrollState.value < scrollState.maxValue } }
+
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(actionButtonsHeight)
-                                .animateContentSize()
-                                .clip(RoundedCornerShape(reorderCornerRadius))
+                                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                                .drawWithContent {
+                                    drawContent()
+                                    val gradientWidth = 8.dp.toPx()
+
+                                    if (showStartFade) {
+                                        drawRect(
+                                            brush = Brush.horizontalGradient(
+                                                colors = listOf(Color.Transparent, Color.Black),
+                                                endX = gradientWidth
+                                            ),
+                                            blendMode = BlendMode.DstIn
+                                        )
+                                    }
+
+                                    if (showEndFade) {
+                                        drawRect(
+                                            brush = Brush.horizontalGradient(
+                                                colors = listOf(Color.Black, Color.Transparent),
+                                                startX = this.size.width - gradientWidth
+                                            ),
+                                            blendMode = BlendMode.DstIn
+                                        )
+                                    }
+                                }
                         ) {
-                            Icon(
-                                modifier = Modifier.size(22.dp),
-                                painter = painterResource(R.drawable.drag_order_icon),
-                                contentDescription = "Reorder songs",
-                                tint = reorderIconColor
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                modifier = Modifier.padding(end = 4.dp),
-                                text = "Reorder",
-                                color = reorderIconColor,
-                                style = MaterialTheme.typography.labelMedium
-                            )
+                            val containerWidthPx = constraints.maxWidth
+
+                            Layout(
+                                modifier = Modifier.horizontalScroll(scrollState),
+                                content = {
+                                    Button(
+                                        onClick = { isRemoveModeEnabled = !isRemoveModeEnabled },
+                                        shape = RoundedCornerShape(removeCornerRadius),
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = removeButtonColor,
+                                            contentColor = removeIconColor
+                                        ),
+                                        modifier = Modifier
+                                            .height(actionButtonsHeight)
+                                            .animateContentSize()
+                                            .clip(RoundedCornerShape(removeCornerRadius))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.RemoveCircleOutline,
+                                            contentDescription = removeSongsCd,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = removeIconColor
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            modifier = Modifier.padding(end = 4.dp),
+                                            text = removeLabel,
+                                            color = removeIconColor,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+
+                                    Button(
+                                        onClick = { isReorderModeEnabled = !isReorderModeEnabled },
+                                        shape = RoundedCornerShape(reorderCornerRadius),
+                                        contentPadding = PaddingValues(horizontal = 8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = reorderButtonColor,
+                                            contentColor = reorderIconColor
+                                        ),
+                                        modifier = Modifier
+                                            .height(actionButtonsHeight)
+                                            .animateContentSize()
+                                            .clip(RoundedCornerShape(reorderCornerRadius))
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.drag_order_icon),
+                                            contentDescription = reorderSongsCd,
+                                            modifier = Modifier.size(22.dp),
+                                            tint = reorderIconColor
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            modifier = Modifier.padding(end = 4.dp),
+                                            text = reorderLabel,
+                                            color = reorderIconColor,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            ) { measurables, childConstraints ->
+                                val spacingPx = 8.dp.roundToPx()
+                                val totalSpacing = spacingPx * (measurables.size - 1)
+
+                                // Query maxIntrinsicWidth of each child without measuring
+                                val totalNaturalWidth = measurables.sumOf { measurable ->
+                                    measurable.maxIntrinsicWidth(Constraints.Infinity)
+                                } + totalSpacing
+
+                                val finalPlaceables = if (totalNaturalWidth <= containerWidthPx && containerWidthPx > 0) {
+                                    // Stretch them equally to fill containerWidthPx
+                                    val availableSpace = containerWidthPx - totalSpacing
+                                    val equalWidth = (availableSpace / measurables.size).coerceAtLeast(0)
+                                    measurables.map { measurable ->
+                                        measurable.measure(
+                                            childConstraints.copy(
+                                                minWidth = equalWidth,
+                                                maxWidth = equalWidth
+                                            )
+                                        )
+                                    }
+                                } else {
+                                    // Measure naturally
+                                    measurables.map { measurable ->
+                                        measurable.measure(
+                                            childConstraints.copy(
+                                                minWidth = 0,
+                                                maxWidth = Constraints.Infinity
+                                            )
+                                        )
+                                    }
+                                }
+
+                                val layoutWidth = if (totalNaturalWidth <= containerWidthPx && containerWidthPx > 0) {
+                                    containerWidthPx
+                                } else {
+                                    totalNaturalWidth
+                                }
+
+                                val height = finalPlaceables.maxOfOrNull { it.height } ?: 0
+
+                                layout(layoutWidth, height) {
+                                    var xPosition = 0
+                                    finalPlaceables.forEach { placeable ->
+                                        placeable.placeRelative(x = xPosition, y = 0)
+                                        xPosition += placeable.width + spacingPx
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -519,11 +665,11 @@ fun PlaylistDetailScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.MusicOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
-                            Text("This playlist is empty.", style = MaterialTheme.typography.titleMedium)
+                            Text(playlistEmptyTitle, style = MaterialTheme.typography.titleMedium)
                             val emptyMessage = if (isFolderPlaylist) {
-                                "This folder doesn't contain songs."
+                                playlistEmptyFolder
                             } else {
-                                "Tap on 'Add Songs' to begin."
+                                playlistEmptyAddHint
                             }
                             Text(emptyMessage, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -552,13 +698,14 @@ fun PlaylistDetailScreen(
                             contentPadding = PaddingValues(
                                 top = 12.dp,
                                 bottom = MiniPlayerHeight + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp,
-                                end = if (listState.canScrollForward || listState.canScrollBackward) 24.dp else 0.dp
+                                end = 0.dp
                             ).let {
+                                val showScrollBar = LocalShowScrollbar.current && (listState.canScrollForward || listState.canScrollBackward)
                                 PaddingValues(
                                     top = it.calculateTopPadding(),
                                     bottom = it.calculateBottomPadding(),
                                     start = it.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                                    end = if (listState.canScrollForward || listState.canScrollBackward) 24.dp else 0.dp
+                                    end = if (showScrollBar) 24.dp else 0.dp
                                 )
                             }
                         ) {
@@ -631,7 +778,7 @@ fun PlaylistDetailScreen(
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Rounded.DragIndicator,
-                                                    contentDescription = "Reorder song",
+                                                    contentDescription = reorderSongCd,
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
@@ -659,8 +806,6 @@ fun PlaylistDetailScreen(
 
     if (showAddSongsSheet && currentPlaylist != null && !isFolderPlaylist) {
         SongPickerBottomSheet(
-            allSongs = uiState.songSelectionForPlaylist,
-            isLoading = uiState.isLoadingSongSelection,
             initiallySelectedSongIds = currentPlaylist.songIds.toSet(),
             onDismiss = { showAddSongsSheet = false },
             onConfirm = { selectedIds ->
@@ -695,7 +840,7 @@ fun PlaylistDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = "Playlist options",
+                        text = playlistOptionsTitle,
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -709,7 +854,7 @@ fun PlaylistDetailScreen(
                 }
                 PlaylistActionItem(
                     icon = painterResource(R.drawable.rounded_edit_24),
-                    label = "Edit playlist",
+                    label = editPlaylistLabel,
                     onClick = {
                         showPlaylistOptionsSheet = false
                         showEditPlaylistDialog = true
@@ -717,7 +862,7 @@ fun PlaylistDetailScreen(
                 )
                 PlaylistActionItem(
                     icon = painterResource(R.drawable.rounded_delete_24),
-                    label = "Delete playlist",
+                    label = deletePlaylistLabel,
                     onClick = {
                         showPlaylistOptionsSheet = false
                         showDeleteConfirmation = true
@@ -725,7 +870,7 @@ fun PlaylistDetailScreen(
                 )
                 PlaylistActionItem(
                     icon = painterResource(R.drawable.outline_graph_1_24),
-                    label = "Set default transition",
+                    label = setDefaultTransitionLabel,
                     onClick = {
                         showPlaylistOptionsSheet = false
                         navController.navigateSafely(Screen.EditTransition.createRoute(playlistId))
@@ -733,10 +878,11 @@ fun PlaylistDetailScreen(
                 )
                 PlaylistActionItem(
                     icon = painterResource(R.drawable.rounded_attach_file_24),
-                    label = "Export Playlist",
+                    label = exportPlaylistLabel,
                     onClick = {
                         showPlaylistOptionsSheet = false
-                        m3uExportLauncher.launch("${currentPlaylist?.name ?: "playlist"}.m3u")
+                        val sanitizedName = PlaylistViewModel.sanitizeFileName(currentPlaylist?.name ?: fallbackPlaylistName)
+                        m3uExportLauncher.launch("$sanitizedName.m3u")
                     }
                 )
             }
@@ -785,9 +931,9 @@ fun PlaylistDetailScreen(
     if (showDeleteConfirmation && currentPlaylist != null) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirmation = false },
-            title = { Text("Delete playlist?") },
+            title = { Text(deletePlaylistConfirmTitle) },
             text = {
-                Text("Are you sure you want to delete this playlist?")
+                Text(deletePlaylistConfirmBody)
             },
             confirmButton = {
                 TextButton(
@@ -797,12 +943,12 @@ fun PlaylistDetailScreen(
                         showDeleteConfirmation = false
                     }
                 ) {
-                    Text("Delete")
+                    Text(stringResource(R.string.common_delete), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirmation = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         )
@@ -831,46 +977,63 @@ fun PlaylistDetailScreen(
                 onDismiss = { showSongInfoBottomSheet = false },
                 onPlaySong = {
                     playerViewModel.showAndPlaySong(currentSong)
-                    showSongInfoBottomSheet = false
                 },
                 onAddToQueue = {
                     playerViewModel.addSongToQueue(currentSong) // Assumes such a method exists or will be added
-                    showSongInfoBottomSheet = false
-                    playerViewModel.sendToast("Added to the queue")
+                    playerViewModel.sendToast(toastAddedToQueue)
                 },
                 onAddNextToQueue = {
                     playerViewModel.addSongNextToQueue(currentSong)
-                    showSongInfoBottomSheet = false
-                    playerViewModel.sendToast("Will play next")
+                    playerViewModel.sendToast(toastPlayingNext)
                 },
                 onAddToPlayList = {
                     showPlaylistBottomSheet = true;
                 },
                 onDeleteFromDevice = playerViewModel::deleteFromDevice,
                 onNavigateToAlbum = {
-                    navController.navigateSafely(Screen.AlbumDetail.createRoute(currentSong.albumId))
+                    navController.navigateSafelyReplacing(
+                        route = Screen.AlbumDetail.createRoute(currentSong.albumId),
+                        patternToPop = Screen.AlbumDetail.route
+                    )
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToArtist = {
-                    navController.navigateSafely(Screen.ArtistDetail.createRoute(currentSong.artistId))
+                    navController.navigateSafelyReplacing(
+                        route = Screen.ArtistDetail.createRoute(currentSong.artistId),
+                        patternToPop = Screen.ArtistDetail.route
+                    )
+                    showSongInfoBottomSheet = false
+                },
+                onNavigateToArtistById = { artistId ->
+                    navController.navigateSafelyReplacing(
+                        route = Screen.ArtistDetail.createRoute(artistId),
+                        patternToPop = Screen.ArtistDetail.route
+                    )
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToGenre = {
                     currentSong.genre?.let {
-                        navController.navigateSafely(Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")))
+                        navController.navigateSafelyReplacing(
+                            route = Screen.GenreDetail.createRoute(java.net.URLEncoder.encode(it, "UTF-8")),
+                            patternToPop = Screen.GenreDetail.route
+                        )
                     }
                     showSongInfoBottomSheet = false
                 },
-                onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, newDiscNumber, coverArtUpdate ->
+                onEditSong = { newTitle, newArtist, newAlbum, newAlbumArtist, newComposer, newGenre, newLyrics, newTrackNumber, newDiscNumber, replayGainTrackGainDb, replayGainAlbumGainDb, coverArtUpdate ->
                     playerViewModel.editSongMetadata(
                         currentSong,
                         newTitle,
                         newArtist,
                         newAlbum,
+                        newAlbumArtist,
+                        newComposer,
                         newGenre,
                         newLyrics,
                         newTrackNumber,
                         newDiscNumber,
+                        replayGainTrackGainDb,
+                        replayGainAlbumGainDb,
                         coverArtUpdate
                     )
                 },
@@ -929,7 +1092,7 @@ fun PlaylistDetailScreen(
         )
 
         LibrarySortBottomSheet(
-            title = "Sort Songs",
+            title = sortSheetTitle,
             options = songSortOptions,
             selectedOption = currentSortOption,
             onDismiss = { playerViewModel.hideSortingSheet() },
@@ -991,32 +1154,4 @@ private fun PlaylistActionItem(
             color = MaterialTheme.colorScheme.onSurface
         )
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-// SongPickerBottomSheet moved to com.theveloper.pixelplay.presentation.components
-fun RenamePlaylistDialog(currentName: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
-    var newName by remember { mutableStateOf(TextFieldValue(currentName)) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Rename Playlist") },
-        text = {
-            OutlinedTextField(
-                value = newName,
-                onValueChange = { newName = it },
-                label = { Text("New name") },
-                shape = CircleShape,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { if (newName.text.isNotBlank()) onRename(newName.text) },
-                enabled = newName.text.isNotBlank() && newName.text != currentName
-            ) { Text("Rename") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
 }

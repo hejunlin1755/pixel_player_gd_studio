@@ -1,4 +1,8 @@
+package com.theveloper.pixelplay.presentation.screens
+
 import android.widget.Toast
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -22,6 +26,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -29,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -62,13 +69,13 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.NavController
-import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.viewmodel.ArtistSettingsViewModel
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.ui.text.style.TextOverflow
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -168,7 +175,7 @@ fun WordDelimiterConfigScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "Current Word Delimiters",
+                            text = stringResource(R.string.word_delimiter_current_title),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -177,7 +184,7 @@ fun WordDelimiterConfigScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "These keywords split artist names when surrounded by spaces. Matched case-insensitively. Tap to remove.",
+                            text = stringResource(R.string.word_delimiter_current_subtitle),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -186,7 +193,7 @@ fun WordDelimiterConfigScreen(
 
                         if (uiState.wordDelimiters.isEmpty()) {
                             Text(
-                                text = "No word delimiters configured",
+                                text = stringResource(R.string.word_delimiter_empty),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
@@ -209,7 +216,7 @@ fun WordDelimiterConfigScreen(
                                         trailingIcon = {
                                             Icon(
                                                 imageVector = Icons.Rounded.Close,
-                                                contentDescription = "Remove",
+                                                contentDescription = stringResource(R.string.common_remove),
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         },
@@ -238,7 +245,7 @@ fun WordDelimiterConfigScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "Add New Word Delimiter",
+                            text = stringResource(R.string.word_delimiter_add_title),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -255,7 +262,7 @@ fun WordDelimiterConfigScreen(
                                 onValueChange = { newDelimiter = it },
                                 placeholder = {
                                     Text(
-                                        text = "e.g., feat. or ft.",
+                                        text = stringResource(R.string.word_delimiter_add_hint),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                     )
                                 },
@@ -268,9 +275,9 @@ fun WordDelimiterConfigScreen(
                                             if (success) {
                                                 newDelimiter = ""
                                                 keyboardController?.hide()
-                                                Toast.makeText(context, "Word delimiter added", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.word_delimiter_toast_added), Toast.LENGTH_SHORT).show()
                                             } else {
-                                                Toast.makeText(context, "Already exists or is invalid", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.word_delimiter_toast_invalid), Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     }
@@ -292,9 +299,9 @@ fun WordDelimiterConfigScreen(
                                         if (success) {
                                             newDelimiter = ""
                                             keyboardController?.hide()
-                                            Toast.makeText(context, "Word delimiter added", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.word_delimiter_toast_added), Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(context, "Already exists or is invalid", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.word_delimiter_toast_invalid), Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 },
@@ -306,7 +313,7 @@ fun WordDelimiterConfigScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Add,
-                                    contentDescription = "Add word delimiter"
+                                    contentDescription = stringResource(R.string.word__delimiter_cd_add)
                                 )
                             }
                         }
@@ -325,7 +332,7 @@ fun WordDelimiterConfigScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "How Word Delimiters Work",
+                            text = stringResource(R.string.word_delimiter_help_title),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -334,12 +341,7 @@ fun WordDelimiterConfigScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Word delimiters are matched case-insensitively with spaces around them.\n\n" +
-                                    "Single-character delimiters (like \"x\") require spaces on both sides to avoid false matches.\n\n" +
-                                    "Examples:\n" +
-                                    "  \"Drake feat. Rihanna\" -> Drake, Rihanna\n" +
-                                    "  \"Marshmello x Bastille\" -> Marshmello, Bastille\n" +
-                                    "  \"A vs. B\" -> A, B",
+                            text = stringResource(R.string.word_delimiter_help_body),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -349,7 +351,7 @@ fun WordDelimiterConfigScreen(
         }
 
         CollapsibleCommonTopBar(
-            title = "Word Delimiters",
+            title = stringResource(R.string.word_delimiters_screen_title),
             collapseFraction = collapseFraction,
             headerHeight = currentTopBarHeightDp,
             onBackClick = { navController.popBackStack() },
@@ -369,11 +371,11 @@ fun WordDelimiterConfigScreen(
                         modifier = Modifier
                             .width(52.dp)
                             .height(36.dp),
-                        shape = androidx.compose.foundation.shape.CircleShape
+                        shape = CircleShape
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.RestartAlt,
-                            contentDescription = "Reset Defaults",
+                            contentDescription = stringResource(R.string.common_reset_defaults),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -382,18 +384,18 @@ fun WordDelimiterConfigScreen(
         )
 
         if (showResetDialog) {
-            androidx.compose.material3.AlertDialog(
+            AlertDialog(
                 onDismissRequest = { showResetDialog = false },
                 title = {
                     Text(
-                        text = "Reset Word Delimiters?",
+                        text = stringResource(R.string.word_delimiter_reset_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                 },
                 text = {
                     Text(
-                        text = "This will clear all your custom word delimiters and restore the default keywords. This action cannot be undone.",
+                        text = stringResource(R.string.word_delimiter_reset_message),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -409,7 +411,7 @@ fun WordDelimiterConfigScreen(
                     Button(
                         onClick = {
                             viewModel.resetWordDelimitersToDefault()
-                            Toast.makeText(context, "Word delimiters reset to defaults", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.word_delimiter_toast_reset), Toast.LENGTH_SHORT).show()
                             showResetDialog = false
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -417,14 +419,14 @@ fun WordDelimiterConfigScreen(
                             contentColor = MaterialTheme.colorScheme.onError
                         )
                     ) {
-                        Text("Reset")
+                        Text(stringResource(R.string.common_reset))
                     }
                 },
                 dismissButton = {
-                    androidx.compose.material3.TextButton(
+                    TextButton(
                         onClick = { showResetDialog = false }
                     ) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

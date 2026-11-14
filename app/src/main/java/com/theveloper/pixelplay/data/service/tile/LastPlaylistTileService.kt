@@ -21,6 +21,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,9 +77,11 @@ class LastPlaylistTileService : TileService() {
         entryPoint.musicRepository()
     }
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onStartListening() {
         // P0-2: Read DataStore without blocking the binder thread
-        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+        serviceScope.launch(Dispatchers.IO) {
             val lastPlaylistId = resolveLaunchablePlaylistId()
             withContext(Dispatchers.Main) {
                 qsTile?.apply {
@@ -92,7 +95,7 @@ class LastPlaylistTileService : TileService() {
 
     override fun onClick() {
         // P0-2: Read DataStore without blocking the binder thread
-        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+        serviceScope.launch(Dispatchers.IO) {
             val playlistId = resolveLaunchablePlaylistId()
             withContext(Dispatchers.Main) {
                 if (playlistId == null) {
@@ -109,6 +112,7 @@ class LastPlaylistTileService : TileService() {
                 }
 
                 val intent = Intent(this@LastPlaylistTileService, MainActivity::class.java).apply {
+                    setPackage(packageName)
                     action = MainActivityIntentContract.ACTION_OPEN_PLAYLIST
                     putExtra(MainActivityIntentContract.EXTRA_PLAYLIST_ID, playlistId)
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -119,6 +123,11 @@ class LastPlaylistTileService : TileService() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
     }
 
     private suspend fun resolveLaunchablePlaylistId(): String? {

@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.data.telegram
 
 import android.content.Context
+import com.theveloper.pixelplay.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,8 @@ class TelegramClientManager @Inject constructor(
     val errors = _errors.asSharedFlow()
 
     private var client: Client? = null
+    @Volatile
+    private var recreateClientAfterClose = false
 
     // Handler for incoming updates from TDLib
     private val updateHandler = Client.ResultHandler { update ->
@@ -66,7 +69,9 @@ class TelegramClientManager @Inject constructor(
         initializeClient()
     }
 
+    @Synchronized
     private fun initializeClient() {
+        if (client != null) return
         // Set log verbosity to 1 (Errors only) to prevent heavy logging
         try {
             Client.execute(TdApi.SetLogVerbosityLevel(1))
@@ -104,12 +109,12 @@ class TelegramClientManager @Inject constructor(
                     true, // useChatInfoDatabase
                     true, // useMessageDatabase
                     false, // useSecretChats
-                    2040, // apiId
-                    "b18441a1ff607e10a989891a5462e627", // apiHash
+                    BuildConfig.TELEGRAM_API_ID,
+                    BuildConfig.TELEGRAM_API_HASH,
                     "en", // systemLanguageCode
-                    android.os.Build.MODEL, // deviceModel
+                    "PixelPlayer Instance", // deviceModel
                     android.os.Build.VERSION.RELEASE, // systemVersion
-                    "1.0" // applicationVersion
+                    BuildConfig.VERSION_NAME
                 ), defaultHandler)
             }
             is TdApi.AuthorizationStateWaitPhoneNumber -> {
@@ -129,6 +134,11 @@ class TelegramClientManager @Inject constructor(
             }
             is TdApi.AuthorizationStateClosed -> {
                 Timber.d("Closed")
+                client = null
+                if (recreateClientAfterClose) {
+                    recreateClientAfterClose = false
+                    initializeClient()
+                }
             }
             else -> {}
         }
@@ -148,7 +158,13 @@ class TelegramClientManager @Inject constructor(
     }
 
     fun logout() {
+        recreateClientAfterClose = true
         client?.send(TdApi.LogOut(), defaultHandler)
+    }
+
+    fun closeClient(recreate: Boolean = false) {
+        recreateClientAfterClose = recreate
+        client?.send(TdApi.Close(), defaultHandler)
     }
 
     /**

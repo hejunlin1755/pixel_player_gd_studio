@@ -28,9 +28,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
 fun DismissUndoBar(
@@ -68,7 +71,7 @@ fun DismissUndoBar(
             ) {
                 Text(
                     modifier = Modifier.padding(start = 10.dp),
-                    text = "Playlist Dismissed",
+                    text = stringResource(R.string.playlist_dismissed_message),
                     style = MaterialTheme.typography.titleSmall
                         .copy(
                             fontFamily = GoogleSansRounded
@@ -83,7 +86,7 @@ fun DismissUndoBar(
                         ),
                         onClick = onUndo
                     ) {
-                        Text("Undo", color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.common_undo), color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     FilledIconButton(
                         colors = IconButtonDefaults.filledIconButtonColors(
@@ -94,7 +97,7 @@ fun DismissUndoBar(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Close",
+                            contentDescription = stringResource(R.string.common_close),
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
                     }

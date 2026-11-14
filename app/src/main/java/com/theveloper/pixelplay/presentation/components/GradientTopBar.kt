@@ -1,5 +1,7 @@
 package com.theveloper.pixelplay.presentation.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -27,6 +29,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults.topAppBarColors
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
-import kotlinx.collections.immutable.toImmutableList
+import com.theveloper.pixelplay.ui.theme.PixelPlayStatusBarStyle
+import androidx.compose.ui.res.stringResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +56,8 @@ fun GenreGradientTopBar(
     val gradientBrush = remember(startColor, endColor) {
         Brush.verticalGradient(colors = listOf(startColor, endColor))
     }
+
+    PixelPlayStatusBarStyle(color = startColor)
 
     LargeTopAppBar(
         scrollBehavior = scrollBehavior,
@@ -75,7 +81,7 @@ fun GenreGradientTopBar(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.common_back),
                     tint = startColor
                 )
             }
@@ -99,26 +105,20 @@ fun HomeGradientTopBar(
     onTelegramClick: () -> Unit,
     onMenuClick: () -> Unit = {},
     onIdentifyClick: () -> Unit = {},
+    isScrolled: Boolean = false,
 ) {
-    // 1) Pinta la status bar con el color surface
-    val surfaceColor = MaterialTheme.colorScheme.surface
+    val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    val gradientColors = listOf(
-        surfaceColor,
-        Color.Transparent
-    ).toImmutableList()
+    PixelPlayStatusBarStyle(color = surfaceContainerHigh)
 
-    // Recordar el Brush basado en la lista de colores recordada
-    val gradientBrush = remember(gradientColors) {
-        Brush.verticalGradient(colors = gradientColors)
-    }
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (isScrolled) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "topbar_alpha_transition"
+    )
 
-
-
-    // 3) TopAppBar con fondo degradado
     TopAppBar(
-        modifier = Modifier
-            .background(brush = gradientBrush),
+        modifier = Modifier.background(surfaceContainerHigh.copy(alpha = animatedAlpha)),
         title = { /* nada, usamos solo acciones */ },
         navigationIcon = {
             Row(
@@ -126,21 +126,6 @@ fun HomeGradientTopBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(start = 12.dp)
             ) {
-                // Hamburger menu button
-//                FilledIconButton(
-//                    colors = IconButtonDefaults.filledIconButtonColors(
-//                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-//                        contentColor = MaterialTheme.colorScheme.onSurface
-//                    ),
-//                    onClick = onMenuClick
-//                ) {
-//                    Icon(
-//                        painter = painterResource(R.drawable.rounded_menu_24),
-//                        contentDescription = "Menu"
-//                    )
-//                }
-                
-                // Beta button
                 FilledTonalButton(
                     modifier = Modifier.padding(start = 4.dp),
                     shape = CircleShape,
@@ -156,12 +141,12 @@ fun HomeGradientTopBar(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "β",
+                            text = stringResource(R.string.topbar_beta_letter),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Black
                         )
                         Text(
-                            text = "Beta",
+                            text = stringResource(R.string.topbar_beta_label),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -172,7 +157,6 @@ fun HomeGradientTopBar(
         actions = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                //horizontalArrangement = Arrangement.spacedBy(2.dp),
                 modifier = Modifier.padding(end = 14.dp)
             ) {
                 FilledIconButton(
@@ -196,10 +180,9 @@ fun HomeGradientTopBar(
                 ) {
                     Icon(
                          imageVector = Icons.Rounded.Cloud,
-                         contentDescription = "Telegram"
+                         contentDescription = stringResource(R.string.topbar_cd_cloud_streaming)
                     )
                 }
-                //Spacer(Modifier.size(8.dp))
                 FilledIconButton(
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -208,12 +191,10 @@ fun HomeGradientTopBar(
                     onClick = onMoreOptionsClick
                 ) {
                     Icon(
-                        //modifier = Modifier.size(18.dp),
                         painter = painterResource(R.drawable.round_newspaper_24),
-                        contentDescription = "Changelog"
+                        contentDescription = stringResource(R.string.topbar_cd_changelog)
                     )
                 }
-                //Spacer(Modifier.size(8.dp))
                 FilledIconButton(
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -223,13 +204,13 @@ fun HomeGradientTopBar(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.rounded_settings_24),
-                        contentDescription = "Settings"
+                        contentDescription = stringResource(R.string.common_settings)
                     )
                 }
             }
         },
         colors = topAppBarColors(
-            containerColor = Color.Transparent // ya pintamos el fondo con el Brush
+            containerColor = Color.Transparent
         )
     )
 }

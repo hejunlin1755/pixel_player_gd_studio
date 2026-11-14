@@ -17,9 +17,13 @@ import com.theveloper.pixelplay.data.preferences.CarouselStyle
 import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
 import com.theveloper.pixelplay.data.preferences.ThemePreference
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.database.AiUsageDao
+import com.theveloper.pixelplay.data.database.AiUsageEntity
 import com.theveloper.pixelplay.data.preferences.AiPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
+import com.theveloper.pixelplay.data.preferences.AlbumArtColorAccuracy
 import com.theveloper.pixelplay.data.preferences.AlbumArtPaletteStyle
+import com.theveloper.pixelplay.data.preferences.AppLanguage
 import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.data.preferences.FullPlayerLoadingTweaks
 import com.theveloper.pixelplay.data.preferences.ThemePreferencesRepository
@@ -32,26 +36,33 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.preferences.NavBarStyle
 import com.theveloper.pixelplay.data.ai.GeminiModel
 import com.theveloper.pixelplay.data.ai.provider.AiClientFactory
 import com.theveloper.pixelplay.data.ai.provider.AiProvider
 import com.theveloper.pixelplay.data.preferences.LaunchTab
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.service.player.HiFiCapabilityChecker
+import com.theveloper.pixelplay.utils.AppLocaleManager
 import java.io.File
 
 data class SettingsUiState(
     val isLoadingDirectories: Boolean = false,
+    val appLanguageTag: String = AppLanguage.SYSTEM.tag,
     val appThemeMode: String = AppThemeMode.FOLLOW_SYSTEM,
     val playerThemePreference: String = ThemePreference.ALBUM_ART,
     val albumArtPaletteStyle: AlbumArtPaletteStyle = AlbumArtPaletteStyle.default,
+    val albumArtColorAccuracy: Int = AlbumArtColorAccuracy.DEFAULT,
     val mockGenresEnabled: Boolean = false,
     val navBarCornerRadius: Int = 32,
     val navBarStyle: String = NavBarStyle.DEFAULT,
+    val navBarCompactMode: Boolean = false,
     val carouselStyle: String = CarouselStyle.NO_PEEK,
     val libraryNavigationMode: String = LibraryNavigationMode.TAB_ROW,
     val launchTab: String = LaunchTab.HOME,
@@ -60,9 +71,11 @@ data class SettingsUiState(
     val resumeOnHeadsetReconnect: Boolean = false,
     val showQueueHistory: Boolean = true,
     val isCrossfadeEnabled: Boolean = false,
+    val hiFiModeEnabled: Boolean = false,
+    val hiFiModeDeviceSupported: Boolean = true,
     val crossfadeDuration: Int = 2000,
     val persistentShuffleEnabled: Boolean = false,
-    val folderBackGestureNavigation: Boolean = false,
+    val folderBackGestureNavigation: Boolean = true,
     val lyricsSourcePreference: LyricsSourcePreference = LyricsSourcePreference.EMBEDDED_FIRST,
     val autoScanLrcFiles: Boolean = false,
     val blockedDirectories: Set<String> = emptySet(),
@@ -73,16 +86,17 @@ data class SettingsUiState(
     val beta05CleanInstallDisclaimerDismissed: Boolean? = null,
     val fullPlayerLoadingTweaks: FullPlayerLoadingTweaks = FullPlayerLoadingTweaks(),
     val showPlayerFileInfo: Boolean = true,
-    val usePlayerSheetV2: Boolean = true,
     // Developer Options
     val albumArtQuality: AlbumArtQuality = AlbumArtQuality.MEDIUM,
-    val tapBackgroundClosesPlayer: Boolean = true,
+    val albumArtCacheLimitMb: Int = 200,
+    val tapBackgroundClosesPlayer: Boolean = false,
     val hapticsEnabled: Boolean = true,
     val immersiveLyricsEnabled: Boolean = false,
     val immersiveLyricsTimeout: Long = 4000L,
     val useAnimatedLyrics: Boolean = false,
     val animatedLyricsBlurEnabled: Boolean = true,
     val animatedLyricsBlurStrength: Float = 2.5f,
+    val disableBlurAllOver: Boolean = false,
     val backupInfoDismissed: Boolean = false,
     val isDataTransferInProgress: Boolean = false,
     val restorePlan: RestorePlan? = null,
@@ -92,8 +106,11 @@ data class SettingsUiState(
     val collagePattern: CollagePattern = CollagePattern.default,
     val collageAutoRotate: Boolean = false,
     val minSongDuration: Int = 10000,
+    val minTracksPerAlbum: Int = 1,
     val replayGainEnabled: Boolean = false,
-    val replayGainUseAlbumGain: Boolean = false
+    val replayGainUseAlbumGain: Boolean = false,
+    val isSafeTokenLimitEnabled: Boolean = true,
+    val showScrollbar: Boolean = true
 )
 
 data class FailedSongInfo(
@@ -123,9 +140,11 @@ private sealed interface SettingsUiUpdate {
         val appThemeMode: String,
         val playerThemePreference: String,
         val albumArtPaletteStyle: AlbumArtPaletteStyle,
+        val albumArtColorAccuracy: Int,
         val mockGenresEnabled: Boolean,
         val navBarCornerRadius: Int,
         val navBarStyle: String,
+        val navBarCompactMode: Boolean,
         val libraryNavigationMode: String,
         val carouselStyle: String,
         val launchTab: String,
@@ -138,6 +157,7 @@ private sealed interface SettingsUiUpdate {
         val resumeOnHeadsetReconnect: Boolean,
         val showQueueHistory: Boolean,
         val isCrossfadeEnabled: Boolean,
+        val hiFiModeEnabled: Boolean,
         val crossfadeDuration: Int,
         val persistentShuffleEnabled: Boolean,
         val folderBackGestureNavigation: Boolean,
@@ -148,17 +168,23 @@ private sealed interface SettingsUiUpdate {
         val immersiveLyricsEnabled: Boolean,
         val immersiveLyricsTimeout: Long,
         val animatedLyricsBlurEnabled: Boolean,
-        val animatedLyricsBlurStrength: Float
+        val animatedLyricsBlurStrength: Float,
+        val disableBlurAllOver: Boolean,
+        val showScrollbar: Boolean
     ) : SettingsUiUpdate
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val aiPreferencesRepository: AiPreferencesRepository,
     private val themePreferencesRepository: ThemePreferencesRepository,
+    private val colorSchemeProcessor: ColorSchemeProcessor,
     private val syncManager: SyncManager,
     private val aiClientFactory: AiClientFactory,
+    private val geminiModelService: com.theveloper.pixelplay.data.ai.GeminiModelService,
+    private val aiUsageDao: AiUsageDao,
     private val lyricsRepository: LyricsRepository,
     private val musicRepository: MusicRepository,
     private val backupManager: BackupManager,
@@ -168,27 +194,236 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    // AI Provider State
+    val aiProvider: StateFlow<String> = aiPreferencesRepository.aiProvider
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "GEMINI")
+
+    // Generic AI settings reactive to the selected provider
+    val currentAiApiKey: StateFlow<String> = aiProvider
+        .flatMapLatest { provider -> aiPreferencesRepository.getApiKey(AiProvider.fromString(provider)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val currentAiModel: StateFlow<String> = aiProvider
+        .flatMapLatest { provider -> aiPreferencesRepository.getModel(AiProvider.fromString(provider)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val currentAiSystemPrompt: StateFlow<String> = aiProvider
+        .flatMapLatest { provider -> aiPreferencesRepository.getSystemPrompt(AiProvider.fromString(provider)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_SYSTEM_PROMPT)
+
+    // Specific Provider StateFlows for UI Compatibility
     val geminiApiKey: StateFlow<String> = aiPreferencesRepository.geminiApiKey
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
     val geminiModel: StateFlow<String> = aiPreferencesRepository.geminiModel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
     val geminiSystemPrompt: StateFlow<String> = aiPreferencesRepository.geminiSystemPrompt
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_SYSTEM_PROMPT)
 
-    val deepseekSystemPrompt: StateFlow<String> = aiPreferencesRepository.deepseekSystemPrompt
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_DEEPSEEK_SYSTEM_PROMPT)
-    
-    // AI Provider Settings
-    val aiProvider: StateFlow<String> = aiPreferencesRepository.aiProvider
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "GEMINI")
-    
     val deepseekApiKey: StateFlow<String> = aiPreferencesRepository.deepseekApiKey
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-    
     val deepseekModel: StateFlow<String> = aiPreferencesRepository.deepseekModel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val deepseekSystemPrompt: StateFlow<String> = aiPreferencesRepository.deepseekSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_DEEPSEEK_SYSTEM_PROMPT)
+
+    val groqApiKey: StateFlow<String> = aiPreferencesRepository.groqApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val groqModel: StateFlow<String> = aiPreferencesRepository.groqModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val groqSystemPrompt: StateFlow<String> = aiPreferencesRepository.groqSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_GROQ_SYSTEM_PROMPT)
+
+    val mistralApiKey: StateFlow<String> = aiPreferencesRepository.mistralApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val mistralModel: StateFlow<String> = aiPreferencesRepository.mistralModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val mistralSystemPrompt: StateFlow<String> = aiPreferencesRepository.mistralSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_MISTRAL_SYSTEM_PROMPT)
+
+    val nvidiaApiKey: StateFlow<String> = aiPreferencesRepository.nvidiaApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val nvidiaModel: StateFlow<String> = aiPreferencesRepository.nvidiaModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val nvidiaSystemPrompt: StateFlow<String> = aiPreferencesRepository.nvidiaSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_NVIDIA_SYSTEM_PROMPT)
+
+    val kimiApiKey: StateFlow<String> = aiPreferencesRepository.kimiApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val kimiModel: StateFlow<String> = aiPreferencesRepository.kimiModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val kimiSystemPrompt: StateFlow<String> = aiPreferencesRepository.kimiSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_KIMI_SYSTEM_PROMPT)
+
+    val glmApiKey: StateFlow<String> = aiPreferencesRepository.glmApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val glmModel: StateFlow<String> = aiPreferencesRepository.glmModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val glmSystemPrompt: StateFlow<String> = aiPreferencesRepository.glmSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_GLM_SYSTEM_PROMPT)
+
+    val openaiApiKey: StateFlow<String> = aiPreferencesRepository.openaiApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val openaiModel: StateFlow<String> = aiPreferencesRepository.openaiModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val openaiSystemPrompt: StateFlow<String> = aiPreferencesRepository.openaiSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_OPENAI_SYSTEM_PROMPT)
+
+    val openrouterApiKey: StateFlow<String> = aiPreferencesRepository.openrouterApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val openrouterModel: StateFlow<String> = aiPreferencesRepository.openrouterModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val openrouterSystemPrompt: StateFlow<String> = aiPreferencesRepository.openrouterSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AiPreferencesRepository.DEFAULT_OPENROUTER_SYSTEM_PROMPT)
+
+    fun onAiApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            val providerStr = aiProvider.value
+            val provider = AiProvider.fromString(providerStr)
+            aiPreferencesRepository.setApiKey(provider, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, providerStr)
+            else clearModelsState(providerStr)
+        }
+    }
+
+    // Specific on-change methods for UI binding
+    fun onGeminiApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.GEMINI, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "GEMINI")
+            else clearModelsState("GEMINI")
+        }
+    }
+    fun onDeepseekApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.DEEPSEEK, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "DEEPSEEK")
+            else clearModelsState("DEEPSEEK")
+        }
+    }
+    fun onGroqApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.GROQ, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "GROQ")
+            else clearModelsState("GROQ")
+        }
+    }
+    fun onMistralApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.MISTRAL, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "MISTRAL")
+            else clearModelsState("MISTRAL")
+        }
+    }
+    fun onNvidiaApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.NVIDIA, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "NVIDIA")
+            else clearModelsState("NVIDIA")
+        }
+    }
+    fun onKimiApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.KIMI, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "KIMI")
+            else clearModelsState("KIMI")
+        }
+    }
+    fun onGlmApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.GLM, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "GLM")
+            else clearModelsState("GLM")
+        }
+    }
+    fun onOpenAiApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.OPENAI, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "OPENAI")
+            else clearModelsState("OPENAI")
+        }
+    }
+    fun onOpenrouterApiKeyChange(apiKey: String) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setApiKey(AiProvider.OPENROUTER, apiKey)
+            if (apiKey.isNotBlank()) fetchAvailableModels(apiKey, "OPENROUTER")
+            else clearModelsState("OPENROUTER")
+        }
+    }
+
+    fun onAiModelChange(model: String) {
+        viewModelScope.launch {
+            val provider = AiProvider.fromString(aiProvider.value)
+            aiPreferencesRepository.setModel(provider, model)
+        }
+    }
+
+    fun onGeminiModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.GEMINI, model) }
+    fun onDeepseekModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.DEEPSEEK, model) }
+    fun onGroqModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.GROQ, model) }
+    fun onMistralModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.MISTRAL, model) }
+    fun onNvidiaModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.NVIDIA, model) }
+    fun onKimiModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.KIMI, model) }
+    fun onGlmModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.GLM, model) }
+    fun onOpenAiModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.OPENAI, model) }
+    fun onOpenrouterModelChange(model: String) = viewModelScope.launch { aiPreferencesRepository.setModel(AiProvider.OPENROUTER, model) }
+
+    fun onAiSystemPromptChange(prompt: String) {
+        viewModelScope.launch {
+            val provider = AiProvider.fromString(aiProvider.value)
+            aiPreferencesRepository.setSystemPrompt(provider, prompt)
+        }
+    }
+
+    fun onGeminiSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.GEMINI, prompt) }
+    fun onDeepseekSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.DEEPSEEK, prompt) }
+    fun onGroqSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.GROQ, prompt) }
+    fun onMistralSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.MISTRAL, prompt) }
+    fun onNvidiaSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.NVIDIA, prompt) }
+    fun onKimiSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.KIMI, prompt) }
+    fun onGlmSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.GLM, prompt) }
+    fun onOpenAiSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.OPENAI, prompt) }
+    fun onOpenrouterSystemPromptChange(prompt: String) = viewModelScope.launch { aiPreferencesRepository.setSystemPrompt(AiProvider.OPENROUTER, prompt) }
+
+    fun resetAiSystemPrompt() {
+        viewModelScope.launch {
+            val provider = AiProvider.fromString(aiProvider.value)
+            aiPreferencesRepository.resetSystemPrompt(provider)
+        }
+    }
+
+    fun resetGeminiSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.GEMINI) }
+    fun resetDeepseekSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.DEEPSEEK) }
+    fun resetGroqSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.GROQ) }
+    fun resetMistralSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.MISTRAL) }
+    fun resetNvidiaSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.NVIDIA) }
+    fun resetKimiSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.KIMI) }
+    fun resetGlmSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.GLM) }
+    fun resetOpenAiSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.OPENAI) }
+    fun resetOpenrouterSystemPrompt() = viewModelScope.launch { aiPreferencesRepository.resetSystemPrompt(AiProvider.OPENROUTER) }
+
+    fun clearAiUsageData() {
+        viewModelScope.launch {
+            aiUsageDao.clearUsage()
+        }
+    }
+
+    val isSafeTokenLimitEnabled: StateFlow<Boolean> = aiPreferencesRepository.isSafeTokenLimitEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val recentAiUsage: StateFlow<List<AiUsageEntity>> = aiUsageDao.getRecentUsages(20)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val totalPromptTokens: StateFlow<Int> = aiUsageDao.getTotalPromptTokens()
+        .map { it ?: 0 }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val totalOutputTokens: StateFlow<Int> = aiUsageDao.getTotalOutputTokens()
+        .map { it ?: 0 }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val totalThoughtTokens: StateFlow<Int> = aiUsageDao.getTotalThoughtTokens()
+        .map { it ?: 0 }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     private val fileExplorerStateHolder = FileExplorerStateHolder(userPreferencesRepository, viewModelScope, context)
 
@@ -200,6 +435,7 @@ class SettingsViewModel @Inject constructor(
     val isLoadingDirectories = fileExplorerStateHolder.isLoading
     val isExplorerPriming = fileExplorerStateHolder.isPrimingExplorer
     val isExplorerReady = fileExplorerStateHolder.isExplorerReady
+    val isCurrentDirectoryResolved = fileExplorerStateHolder.isCurrentDirectoryResolved
     private var hasPendingDirectoryRuleChanges = false
     private var latestDirectoryRuleUpdateJob: Job? = null
 
@@ -220,6 +456,9 @@ class SettingsViewModel @Inject constructor(
     private val _dataTransferEvents = MutableSharedFlow<String>()
     val dataTransferEvents: SharedFlow<String> = _dataTransferEvents.asSharedFlow()
 
+    private val _dataTransferProgress = MutableStateFlow<BackupTransferProgressUpdate?>(null)
+    val dataTransferProgress: StateFlow<BackupTransferProgressUpdate?> = _dataTransferProgress.asStateFlow()
+
     init {
         viewModelScope.launch {
             backupManager.getBackupHistory().collect { history ->
@@ -238,12 +477,15 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(collageAutoRotate = autoRotate) }
             }
         }
-    }
 
-    private val _dataTransferProgress = MutableStateFlow<BackupTransferProgressUpdate?>(null)
-    val dataTransferProgress: StateFlow<BackupTransferProgressUpdate?> = _dataTransferProgress.asStateFlow()
+        // One-time device capability check — result is cached inside HiFiCapabilityChecker
+        _uiState.update {
+            it.copy(
+                hiFiModeDeviceSupported = HiFiCapabilityChecker.isSupported(),
+                appLanguageTag = AppLocaleManager.currentLanguageTag(context)
+            )
+        }
 
-    init {
         // Consolidated collectors using combine() to reduce coroutine overhead
         // Instead of 20 separate coroutines, we use 2 combined flows
         
@@ -254,9 +496,11 @@ class SettingsViewModel @Inject constructor(
                 themePreferencesRepository.appThemeModeFlow,
                 themePreferencesRepository.playerThemePreferenceFlow,
                 themePreferencesRepository.albumArtPaletteStyleFlow,
+                themePreferencesRepository.albumArtColorAccuracyFlow,
                 userPreferencesRepository.mockGenresEnabledFlow,
                 userPreferencesRepository.navBarCornerRadiusFlow,
                 userPreferencesRepository.navBarStyleFlow,
+                userPreferencesRepository.navBarCompactModeFlow,
                 userPreferencesRepository.libraryNavigationModeFlow,
                 userPreferencesRepository.carouselStyleFlow,
                 userPreferencesRepository.launchTabFlow,
@@ -267,13 +511,15 @@ class SettingsViewModel @Inject constructor(
                     appThemeMode = values[1] as String,
                     playerThemePreference = values[2] as String,
                     albumArtPaletteStyle = values[3] as AlbumArtPaletteStyle,
-                    mockGenresEnabled = values[4] as Boolean,
-                    navBarCornerRadius = values[5] as Int,
-                    navBarStyle = values[6] as String,
-                    libraryNavigationMode = values[7] as String,
-                    carouselStyle = values[8] as String,
-                    launchTab = values[9] as String,
-                    showPlayerFileInfo = values[10] as Boolean
+                    albumArtColorAccuracy = values[4] as Int,
+                    mockGenresEnabled = values[5] as Boolean,
+                    navBarCornerRadius = values[6] as Int,
+                    navBarStyle = values[7] as String,
+                    navBarCompactMode = values[8] as Boolean,
+                    libraryNavigationMode = values[9] as String,
+                    carouselStyle = values[10] as String,
+                    launchTab = values[11] as String,
+                    showPlayerFileInfo = values[12] as Boolean
                 )
             }.collect { update ->
                 _uiState.update { state ->
@@ -282,9 +528,11 @@ class SettingsViewModel @Inject constructor(
                         appThemeMode = update.appThemeMode,
                         playerThemePreference = update.playerThemePreference,
                         albumArtPaletteStyle = update.albumArtPaletteStyle,
+                        albumArtColorAccuracy = update.albumArtColorAccuracy,
                         mockGenresEnabled = update.mockGenresEnabled,
                         navBarCornerRadius = update.navBarCornerRadius,
                         navBarStyle = update.navBarStyle,
+                        navBarCompactMode = update.navBarCompactMode,
                         libraryNavigationMode = update.libraryNavigationMode,
                         carouselStyle = update.carouselStyle,
                         launchTab = update.launchTab,
@@ -302,6 +550,7 @@ class SettingsViewModel @Inject constructor(
                 userPreferencesRepository.resumeOnHeadsetReconnectFlow,
                 userPreferencesRepository.showQueueHistoryFlow,
                 userPreferencesRepository.isCrossfadeEnabledFlow,
+                userPreferencesRepository.hiFiModeEnabledFlow,
                 userPreferencesRepository.crossfadeDurationFlow,
                 userPreferencesRepository.persistentShuffleEnabledFlow,
                 userPreferencesRepository.folderBackGestureNavigationFlow,
@@ -312,7 +561,9 @@ class SettingsViewModel @Inject constructor(
                 userPreferencesRepository.immersiveLyricsEnabledFlow,
                 userPreferencesRepository.immersiveLyricsTimeoutFlow,
                 userPreferencesRepository.animatedLyricsBlurEnabledFlow,
-                userPreferencesRepository.animatedLyricsBlurStrengthFlow
+                userPreferencesRepository.animatedLyricsBlurStrengthFlow,
+                userPreferencesRepository.disableBlurAllOverFlow,
+                userPreferencesRepository.showScrollbarFlow
             ) { values ->
                 SettingsUiUpdate.Group2(
                     keepPlayingInBackground = values[0] as Boolean,
@@ -320,17 +571,20 @@ class SettingsViewModel @Inject constructor(
                     resumeOnHeadsetReconnect = values[2] as Boolean,
                     showQueueHistory = values[3] as Boolean,
                     isCrossfadeEnabled = values[4] as Boolean,
-                    crossfadeDuration = values[5] as Int,
-                    persistentShuffleEnabled = values[6] as Boolean,
-                    folderBackGestureNavigation = values[7] as Boolean,
-                    lyricsSourcePreference = values[8] as LyricsSourcePreference,
-                    autoScanLrcFiles = values[9] as Boolean,
-                    blockedDirectories = @Suppress("UNCHECKED_CAST") (values[10] as Set<String>),
-                    hapticsEnabled = values[11] as Boolean,
-                    immersiveLyricsEnabled = values[12] as Boolean,
-                    immersiveLyricsTimeout = values[13] as Long,
-                    animatedLyricsBlurEnabled = values[14] as Boolean,
-                    animatedLyricsBlurStrength = values[15] as Float
+                    hiFiModeEnabled = values[5] as Boolean,
+                    crossfadeDuration = values[6] as Int,
+                    persistentShuffleEnabled = values[7] as Boolean,
+                    folderBackGestureNavigation = values[8] as Boolean,
+                    lyricsSourcePreference = values[9] as LyricsSourcePreference,
+                    autoScanLrcFiles = values[10] as Boolean,
+                    blockedDirectories = @Suppress("UNCHECKED_CAST") (values[11] as Set<String>),
+                    hapticsEnabled = values[12] as Boolean,
+                    immersiveLyricsEnabled = values[13] as Boolean,
+                    immersiveLyricsTimeout = values[14] as Long,
+                    animatedLyricsBlurEnabled = values[15] as Boolean,
+                    animatedLyricsBlurStrength = values[16] as Float,
+                    disableBlurAllOver = values[17] as Boolean,
+                    showScrollbar = values[18] as Boolean
                 )
             }.collect { update ->
                 _uiState.update { state ->
@@ -340,6 +594,7 @@ class SettingsViewModel @Inject constructor(
                         resumeOnHeadsetReconnect = update.resumeOnHeadsetReconnect,
                         showQueueHistory = update.showQueueHistory,
                         isCrossfadeEnabled = update.isCrossfadeEnabled,
+                        hiFiModeEnabled = update.hiFiModeEnabled,
                         crossfadeDuration = update.crossfadeDuration,
                         persistentShuffleEnabled = update.persistentShuffleEnabled,
                         folderBackGestureNavigation = update.folderBackGestureNavigation,
@@ -350,7 +605,9 @@ class SettingsViewModel @Inject constructor(
                         immersiveLyricsEnabled = update.immersiveLyricsEnabled,
                         immersiveLyricsTimeout = update.immersiveLyricsTimeout,
                         animatedLyricsBlurEnabled = update.animatedLyricsBlurEnabled,
-                        animatedLyricsBlurStrength = update.animatedLyricsBlurStrength
+                        animatedLyricsBlurStrength = update.animatedLyricsBlurStrength,
+                        disableBlurAllOver = update.disableBlurAllOver,
+                        showScrollbar = update.showScrollbar
                     )
                 }
             }
@@ -360,12 +617,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             userPreferencesRepository.fullPlayerLoadingTweaksFlow.collect { tweaks ->
                 _uiState.update { it.copy(fullPlayerLoadingTweaks = tweaks) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.usePlayerSheetV2Flow.collect { enabled ->
-                _uiState.update { it.copy(usePlayerSheetV2 = enabled) }
             }
         }
 
@@ -401,6 +652,12 @@ class SettingsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            userPreferencesRepository.albumArtCacheLimitMbFlow.collect { limitMb ->
+                _uiState.update { it.copy(albumArtCacheLimitMb = limitMb) }
+            }
+        }
+
+        viewModelScope.launch {
             userPreferencesRepository.tapBackgroundClosesPlayerFlow.collect { enabled ->
                 _uiState.update { it.copy(tapBackgroundClosesPlayer = enabled) }
             }
@@ -413,6 +670,12 @@ class SettingsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            userPreferencesRepository.minTracksPerAlbumFlow.collect { minTracks ->
+                _uiState.update { it.copy(minTracksPerAlbum = minTracks) }
+            }
+        }
+
+        viewModelScope.launch {
             userPreferencesRepository.replayGainEnabledFlow.collect { enabled ->
                 _uiState.update { it.copy(replayGainEnabled = enabled) }
             }
@@ -421,6 +684,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             userPreferencesRepository.replayGainUseAlbumGainFlow.collect { useAlbum ->
                 _uiState.update { it.copy(replayGainUseAlbumGain = useAlbum) }
+            }
+        }
+
+        viewModelScope.launch {
+            aiPreferencesRepository.isSafeTokenLimitEnabled.collect { enabled ->
+                _uiState.update { it.copy(isSafeTokenLimitEnabled = enabled) }
             }
         }
     }
@@ -461,6 +730,10 @@ class SettingsViewModel @Inject constructor(
         fileExplorerStateHolder.primeExplorerRoot()
     }
 
+    fun openExplorer() {
+        fileExplorerStateHolder.openExplorerRoot()
+    }
+
     fun navigateUp() {
         fileExplorerStateHolder.navigateUp()
     }
@@ -494,6 +767,27 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setAlbumArtPaletteSettings(
+        style: AlbumArtPaletteStyle,
+        accuracyLevel: Int
+    ) {
+        viewModelScope.launch {
+            themePreferencesRepository.setAlbumArtPaletteSettings(style, accuracyLevel)
+        }
+    }
+
+    suspend fun getAlbumArtPalettePreview(
+        uriString: String,
+        style: AlbumArtPaletteStyle,
+        accuracyLevel: Int
+    ): ColorSchemePair? {
+        return colorSchemeProcessor.getPreviewColorScheme(
+            albumArtUri = uriString,
+            paletteStyle = style,
+            colorAccuracyLevel = accuracyLevel
+        )
+    }
+
     fun setCollagePattern(pattern: CollagePattern) {
         viewModelScope.launch {
             userPreferencesRepository.setCollagePattern(pattern)
@@ -512,9 +806,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setAppLanguage(languageTag: String) {
+        val normalized = AppLanguage.normalize(languageTag)
+        AppLocaleManager.applyLanguage(context, normalized)
+        _uiState.update { it.copy(appLanguageTag = normalized) }
+    }
+
     fun setNavBarStyle(style: String) {
         viewModelScope.launch {
             userPreferencesRepository.setNavBarStyle(style)
+        }
+    }
+
+    fun setNavBarCompactMode(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setNavBarCompactMode(enabled)
         }
     }
 
@@ -533,6 +839,12 @@ class SettingsViewModel @Inject constructor(
     fun setShowPlayerFileInfo(show: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setShowPlayerFileInfo(show)
+        }
+    }
+
+    fun setShowScrollbar(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setShowScrollbar(enabled)
         }
     }
 
@@ -557,6 +869,12 @@ class SettingsViewModel @Inject constructor(
     fun setResumeOnHeadsetReconnect(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setResumeOnHeadsetReconnect(enabled)
+        }
+    }
+
+    fun setHiFiModeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setHiFiModeEnabled(enabled)
         }
     }
 
@@ -671,12 +989,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setUsePlayerSheetV2(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.setUsePlayerSheetV2(enabled)
-        }
-    }
-
     fun setUseAnimatedLyrics(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setUseAnimatedLyrics(enabled)
@@ -695,10 +1007,22 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setDisableBlurAllOver(disabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setDisableBlurAllOver(disabled)
+        }
+    }
+
     fun refreshLibrary() {
         viewModelScope.launch {
             if (isSyncing.value) return@launch
             syncManager.forceRefresh()
+        }
+    }
+
+    fun setSafeTokenLimitEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            aiPreferencesRepository.setSafeTokenLimitEnabled(enabled)
         }
     }
 
@@ -721,6 +1045,12 @@ class SettingsViewModel @Inject constructor(
             userPreferencesRepository.setMinSongDuration(durationMs)
             // Trigger a library rescan so the change takes effect in the database
             syncManager.fullSync()
+        }
+    }
+
+    fun setMinTracksPerAlbum(minTracks: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.setMinTracksPerAlbum(minTracks)
         }
     }
 
@@ -760,126 +1090,93 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun onGeminiApiKeyChange(apiKey: String) {
-        viewModelScope.launch {
-            aiPreferencesRepository.setGeminiApiKey(apiKey)
-
-            // Fetch models when API key changes and is not empty
-            if (apiKey.isNotBlank()) {
-                fetchAvailableModels(apiKey, "GEMINI")
-            } else {
-                // Clear models if API key is empty
-                _uiState.update {
-                    it.copy(
-                        availableModels = emptyList(),
-                        modelsFetchError = null
-                    )
-                }
-                aiPreferencesRepository.setGeminiModel("")
-            }
-        }
-    }
-    
     fun onAiProviderChange(provider: String) {
         viewModelScope.launch {
             aiPreferencesRepository.setAiProvider(provider)
 
-            // Fetch models for the selected provider
-            val apiKey = when (provider) {
-                "GEMINI" -> geminiApiKey.value
-                "DEEPSEEK" -> deepseekApiKey.value
-                else -> ""
-            }
-
+            // Clear existing models immediately to show loading state
             _uiState.update {
                 it.copy(
                     availableModels = emptyList(),
-                    modelsFetchError = null
+                    modelsFetchError = null,
+                    isLoadingModels = false
                 )
             }
+
+            // Small delay to let the provider preference propagate to StateFlows
+            delay(100)
+
+            // Fetch models for the newly selected provider if we have an API key
+            val apiKey = aiPreferencesRepository.getApiKey(AiProvider.fromString(provider)).first()
 
             if (apiKey.isNotBlank()) {
                 fetchAvailableModels(apiKey, provider)
             }
         }
     }
-    
-    fun onDeepseekApiKeyChange(apiKey: String) {
+
+    fun loadModelsForCurrentProvider() {
         viewModelScope.launch {
-            aiPreferencesRepository.setDeepseekApiKey(apiKey)
+            if (_uiState.value.isLoadingModels) return@launch
+            if (_uiState.value.availableModels.isNotEmpty()) return@launch
             
-            // Fetch models when API key changes and is not empty
-            if (apiKey.isNotBlank() && aiProvider.value == "DEEPSEEK") {
-                fetchAvailableModels(apiKey, "DEEPSEEK")
-            } else if (apiKey.isBlank()) {
-                // Clear models if API key is empty
-                _uiState.update {
-                    it.copy(
-                        availableModels = emptyList(),
-                        modelsFetchError = null
-                    )
-                }
-                aiPreferencesRepository.setDeepseekModel("")
+            val provider = aiProvider.value
+            val apiKey = aiPreferencesRepository.getApiKey(AiProvider.fromString(provider)).first()
+            
+            if (apiKey.isNotBlank()) {
+                fetchAvailableModels(apiKey, provider)
             }
         }
     }
-    
-    fun onDeepseekModelChange(model: String) {
+
+    private fun clearModelsState(provider: String) {
+        _uiState.update {
+            it.copy(
+                availableModels = emptyList(),
+                modelsFetchError = null
+            )
+        }
         viewModelScope.launch {
-            aiPreferencesRepository.setDeepseekModel(model)
+            aiPreferencesRepository.setModel(AiProvider.fromString(provider), "")
         }
     }
 
-    fun onDeepseekSystemPromptChange(prompt: String) {
-        viewModelScope.launch {
-            aiPreferencesRepository.setDeepseekSystemPrompt(prompt)
-        }
-    }
-
-    fun resetDeepseekSystemPrompt() {
-        viewModelScope.launch {
-            aiPreferencesRepository.resetDeepseekSystemPrompt()
-        }
-    }
-
-    fun fetchAvailableModels(apiKey: String, providerName: String = aiProvider.value) {
+    private fun fetchAvailableModels(apiKey: String, providerName: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingModels = true, modelsFetchError = null) }
-
-            val result = runCatching {
+            try {
                 val provider = AiProvider.fromString(providerName)
-                val client = aiClientFactory.createClient(provider, apiKey)
-                client.getAvailableModels(apiKey).map { modelName ->
-                    GeminiModel(name = modelName, displayName = formatModelDisplayName(modelName))
+                val models = if (provider == AiProvider.GEMINI) {
+                    geminiModelService.fetchAvailableModels(apiKey).getOrThrow()
+                } else {
+                    val aiClient = aiClientFactory.createClient(provider, apiKey)
+                    aiClient.getAvailableModels(apiKey)
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                        .map { com.theveloper.pixelplay.data.ai.GeminiModel(it, formatModelDisplayName(it)) }
                 }
-            }
-
-            result.onSuccess { rawModels ->
-                val models = rawModels.distinctBy { it.name }
-                _uiState.update {
+                
+                _uiState.update { 
                     it.copy(
-                        availableModels = models,
+                        availableModels = models, 
                         isLoadingModels = false,
                         modelsFetchError = null
-                    )
+                    ) 
                 }
 
-                // Auto-select first model if none is selected
-                val currentModel = when (providerName) {
-                    "DEEPSEEK" -> aiPreferencesRepository.deepseekModel.first()
-                    else -> aiPreferencesRepository.geminiModel.first()
+                // Auto-select first model if nothing is selected yet
+                val currentModel = aiPreferencesRepository.getModel(provider).first()
+                val availableModelNames = models.map { it.name }.toSet()
+                if (models.isNotEmpty() && (currentModel.isBlank() || currentModel !in availableModelNames)) {
+                    val firstModel = models.first().name
+                    aiPreferencesRepository.setModel(provider, firstModel)
                 }
-                if (currentModel.isEmpty() && models.isNotEmpty()) {
-                    when (providerName) {
-                        "DEEPSEEK" -> aiPreferencesRepository.setDeepseekModel(models.first().name)
-                        else -> aiPreferencesRepository.setGeminiModel(models.first().name)
-                    }
-                }
-            }.onFailure { error ->
+            } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         isLoadingModels = false,
-                        modelsFetchError = error.message ?: "Failed to fetch models"
+                        modelsFetchError = e.message ?: context.getString(R.string.settings_models_fetch_failed),
                     )
                 }
             }
@@ -892,44 +1189,21 @@ class SettingsViewModel @Inject constructor(
             .replace('-', ' ')
             .replace('_', ' ')
             .split(' ')
-            .filter { it.isNotBlank() }
             .joinToString(" ") { token ->
                 token.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
             }
     }
 
-    fun onGeminiModelChange(modelName: String) {
-        viewModelScope.launch {
-            aiPreferencesRepository.setGeminiModel(modelName)
-        }
-    }
 
     fun setNavBarCornerRadius(radius: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.setNavBarCornerRadius(radius)
-        }
+        viewModelScope.launch { userPreferencesRepository.setNavBarCornerRadius(radius) }
     }
-
-    fun onGeminiSystemPromptChange(prompt: String) {
-        viewModelScope.launch {
-            aiPreferencesRepository.setGeminiSystemPrompt(prompt)
-        }
-    }
-
-    fun resetGeminiSystemPrompt() {
-        viewModelScope.launch {
-            aiPreferencesRepository.resetGeminiSystemPrompt()
-        }
-    }
-
-
-
     /**
      * Triggers a test crash to verify the crash handler is working correctly.
      * This should only be used for testing in Developer Options.
      */
     fun triggerTestCrash() {
-        throw RuntimeException("Test crash triggered from Developer Options - This is intentional for testing the crash reporting system")
+        throw RuntimeException(context.getString(R.string.settings_dev_test_crash_message))
     }
 
     fun resetSetupFlow() {
@@ -952,6 +1226,13 @@ class SettingsViewModel @Inject constructor(
     fun setAlbumArtQuality(quality: AlbumArtQuality) {
         viewModelScope.launch {
             userPreferencesRepository.setAlbumArtQuality(quality)
+        }
+    }
+
+    fun setAlbumArtCacheLimitMb(limitMb: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.setAlbumArtCacheLimitMb(limitMb)
+            com.theveloper.pixelplay.utils.AlbumArtCacheManager.configuredCacheLimitMb = limitMb.toLong()
         }
     }
 
@@ -987,15 +1268,22 @@ class SettingsViewModel @Inject constructor(
                 operation = BackupOperationType.EXPORT,
                 step = 0,
                 totalSteps = 1,
-                title = "Preparing backup",
-                detail = "Starting backup task."
+                title = context.getString(R.string.settings_backup_progress_preparing_backup),
+                detail = context.getString(R.string.settings_backup_progress_starting_backup_task),
             )
             val result = backupManager.export(uri, sections) { progress ->
                 _dataTransferProgress.value = progress
             }
             result.fold(
-                onSuccess = { _dataTransferEvents.emit("Data exported successfully") },
-                onFailure = { _dataTransferEvents.emit("Export failed: ${it.localizedMessage ?: "Unknown error"}") }
+                onSuccess = { _dataTransferEvents.emit(context.getString(R.string.settings_data_exported_successfully)) },
+                onFailure = {
+                    _dataTransferEvents.emit(
+                        context.getString(
+                            R.string.settings_export_failed_format,
+                            it.localizedMessage ?: context.getString(R.string.common_error_unknown),
+                        ),
+                    )
+                },
             )
             delay(300)
             _uiState.update { it.copy(isDataTransferInProgress = false) }
@@ -1013,7 +1301,12 @@ class SettingsViewModel @Inject constructor(
                     _uiState.update { it.copy(restorePlan = plan, isInspectingBackup = false) }
                 },
                 onFailure = { error ->
-                    _dataTransferEvents.emit("Invalid backup: ${error.localizedMessage ?: "Unknown error"}")
+                    _dataTransferEvents.emit(
+                        context.getString(
+                            R.string.settings_backup_invalid_format,
+                            error.localizedMessage ?: context.getString(R.string.common_error_unknown),
+                        ),
+                    )
                     _uiState.update { it.copy(isInspectingBackup = false) }
                 }
             )
@@ -1037,28 +1330,28 @@ class SettingsViewModel @Inject constructor(
                 operation = BackupOperationType.IMPORT,
                 step = 0,
                 totalSteps = 1,
-                title = "Preparing restore",
-                detail = "Starting restore task."
+                title = context.getString(R.string.settings_backup_progress_preparing_restore),
+                detail = context.getString(R.string.settings_backup_progress_starting_task),
             )
             val result = backupManager.restore(uri, plan) { progress ->
                 _dataTransferProgress.value = progress
             }
             when (result) {
                 is RestoreResult.Success -> {
-                    _dataTransferEvents.emit("Data restored successfully")
+                    _dataTransferEvents.emit(context.getString(R.string.settings_data_restored_successfully))
                     syncManager.sync()
                 }
                 is RestoreResult.PartialFailure -> {
                     val failedNames = result.failed.entries.joinToString { "${it.key.label}: ${it.value}" }
                     _dataTransferEvents.emit(
-                        "Restore completed with unresolved issues. Failed: $failedNames"
+                        context.getString(R.string.settings_restore_partial_unresolved_format, failedNames),
                     )
                     if (result.succeeded.isNotEmpty() || !result.rolledBack) {
                         syncManager.sync()
                     }
                 }
                 is RestoreResult.TotalFailure -> {
-                    _dataTransferEvents.emit("Restore failed: ${result.error}")
+                    _dataTransferEvents.emit(context.getString(R.string.settings_restore_failed_format, result.error))
                 }
             }
             delay(300)
@@ -1076,4 +1369,5 @@ class SettingsViewModel @Inject constructor(
             backupManager.removeBackupHistoryEntry(entry.uri)
         }
     }
+
 }

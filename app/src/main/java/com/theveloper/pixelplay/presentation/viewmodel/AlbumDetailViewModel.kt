@@ -43,10 +43,10 @@ class AlbumDetailViewModel @Inject constructor(
             if (albumId != null) {
                 loadAlbumData(albumId)
             } else {
-                _uiState.update { it.copy(error = context.getString(R.string.invalid_album_id), isLoading = false) }
+                _uiState.update { it.copy(error = context.getString(R.string.album_detail_invalid_id), isLoading = false) }
             }
         } else {
-            _uiState.update { it.copy(error = context.getString(R.string.album_id_not_found), isLoading = false) }
+            _uiState.update { it.copy(error = context.getString(R.string.album_detail_id_not_found), isLoading = false) }
         }
     }
 
@@ -61,12 +61,16 @@ class AlbumDetailViewModel @Inject constructor(
                     if (album != null) {
                         AlbumDetailUiState(
                             album = album,
-                            songs = songs.sortedWith(compareBy({ it.discNumber }, { it.trackNumber })),
+                            songs = songs.sortedWith(
+                                compareBy<Song> { it.discNumber ?: 1 }
+                                    .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
+                                    .thenBy { it.title.lowercase() }
+                            ),
                             isLoading = false
                         )
                     } else {
                         AlbumDetailUiState(
-                            error = context.getString(R.string.album_not_found),
+                            error = context.getString(R.string.album_detail_not_found),
                             isLoading = false
                         )
                     }
@@ -74,7 +78,7 @@ class AlbumDetailViewModel @Inject constructor(
                     .catch { e ->
                         emit(
                             AlbumDetailUiState(
-                                error = context.getString(R.string.error_loading_album, e.localizedMessage ?: ""),
+                                error = context.getString(R.string.album_detail_error_loading_album, e.localizedMessage ?: ""),
                                 isLoading = false
                             )
                         )
@@ -86,7 +90,7 @@ class AlbumDetailViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
-                        error = context.getString(R.string.error_loading_album, e.localizedMessage ?: ""),
+                        error = context.getString(R.string.album_detail_error_loading_album, e.localizedMessage ?: ""),
                         isLoading = false
                     )
                 }

@@ -4,14 +4,16 @@ import com.theveloper.pixelplay.utils.LogUtils
 import com.theveloper.pixelplay.data.stream.CloudStreamSecurity
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.application.call
-import io.ktor.server.engine.*
-import io.ktor.server.cio.*
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.routing
+import io.ktor.server.cio.CIO
+import io.ktor.server.cio.CIOApplicationEngine
+import io.ktor.server.engine.EmbeddedServer
+import io.ktor.server.engine.EngineConnectorBuilder
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.header
 import io.ktor.server.routing.get
-import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeFully
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
@@ -32,20 +34,12 @@ import javax.inject.Singleton
 class TelegramStreamProxy @Inject constructor(
     private val telegramRepository: TelegramRepository
 ) {
-    private var server: ApplicationEngine? = null
+    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private val proxyScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startJob: Job? = null
 
-    private fun createServer(port: Int): ApplicationEngine {
-        return embeddedServer(
-            CIO,
-            host = "127.0.0.1",
-            port = port,
-            configure = {
-                // Fast proxy restarts can otherwise fail if the previous socket is still draining.
-                reuseAddress = true
-            }
-        ) {
+    private fun createServer(port: Int): EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration> {
+        return embeddedServer(CIO, port = port, host = "127.0.0.1") {
             routing {
                 get("/stream/{fileId}") {
                     val fileId = call.parameters["fileId"]?.toIntOrNull()
@@ -86,7 +80,7 @@ class TelegramStreamProxy @Inject constructor(
                         return@get
                     }
                     
-                    val path = fileInfo!!.local.path
+                    val path = fileInfo.local.path
                     var expectedSize = fileInfo.expectedSize
 
                     // Optional hint from caller; only trusted within sane limits.
@@ -195,10 +189,17 @@ class TelegramStreamProxy @Inject constructor(
                             var currentPos = start
                             val buffer = ByteArray(64 * 1024) // Increased to 64KB for smoother streaming
                             var noDataCount = 0
-                            
+                            // Exponential backoff while the reader is waiting for TDLib to
+                            // deliver more bytes. The previous fixed 50ms delay combined with
+                            // a per-iteration getFile() call kept the IO thread and TDLib
+                            // database churning during any stall, which showed up as sustained
+                            // CPU heat on weaker devices during cloud playback.
+                            var stallDelayMs = 50L
+                            val maxStallDelayMs = 400L
+
                             raf.seek(currentPos)
-                            
-                            var cachedDownloadedPrefixSize = fileInfo?.local?.downloadedPrefixSize?.toLong() ?: 0L
+
+                            var cachedDownloadedPrefixSize = fileInfo.local.downloadedPrefixSize
 
                             while (true) {
                                 // 1. Check if we've reached the end of the requested range
@@ -209,7 +210,7 @@ class TelegramStreamProxy @Inject constructor(
                                 if (currentPos >= cachedDownloadedPrefixSize) {
                                     // We reached the limit of what we know is downloaded. Refresh info.
                                     val updatedInfo = telegramRepository.getFile(fileId)
-                                    cachedDownloadedPrefixSize = updatedInfo?.local?.downloadedPrefixSize?.toLong() ?: 0L
+                                    cachedDownloadedPrefixSize = updatedInfo?.local?.downloadedPrefixSize ?: 0L
 
                                     // If still no new data, wait or check completion
                                     if (currentPos >= cachedDownloadedPrefixSize) {
@@ -218,14 +219,19 @@ class TelegramStreamProxy @Inject constructor(
                                             // If size is different than expected, we still stop because we can't get more.
                                             break
                                         }
-                                        
+
                                         // Verify cancellation/failure
                                         if (updatedInfo?.local?.isDownloadingCompleted == false && !updatedInfo.local.canBeDownloaded) {
                                              break // Failed/Cancelled
                                         }
-                                        
-                                        delay(50) // Wait for more data
+
+                                        delay(stallDelayMs)
+                                        stallDelayMs = (stallDelayMs * 2).coerceAtMost(maxStallDelayMs)
                                         continue
+                                    } else {
+                                        // New data arrived — reset the backoff so we stay
+                                        // responsive once the download catches up.
+                                        stallDelayMs = 50L
                                     }
                                 }
 
@@ -233,7 +239,7 @@ class TelegramStreamProxy @Inject constructor(
                                 // Read min of: buffer size, remaining in range, remaining valid bytes
                                 val remainingValid = cachedDownloadedPrefixSize - currentPos
                                 val toRead = min(buffer.size.toLong(), min(remaining, remainingValid)).toInt()
-                                
+
                                 val read = raf.read(buffer, 0, toRead)
                                 if (read > 0) {
                                     writeFully(buffer, 0, read)
@@ -264,6 +270,8 @@ class TelegramStreamProxy @Inject constructor(
             }
         }
     }
+
+    private fun connector(builder: EngineConnectorBuilder.() -> Unit) {}
 
     private var actualPort: Int = 0
 

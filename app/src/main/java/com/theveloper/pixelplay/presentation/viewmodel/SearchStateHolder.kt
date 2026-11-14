@@ -1,6 +1,5 @@
 package com.theveloper.pixelplay.presentation.viewmodel
 
-import android.util.Log
 import com.theveloper.pixelplay.data.gdstudio.GdStudioLibrary
 import com.theveloper.pixelplay.data.model.SearchFilterType
 import com.theveloper.pixelplay.data.model.SearchHistoryItem
@@ -22,9 +21,11 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.FlowPreview
 
 enum class SearchStatus {
     Idle,
@@ -87,6 +88,7 @@ class SearchStateHolder @Inject constructor(
         observeSearchRequests()
     }
 
+    @OptIn(FlowPreview::class)
     private fun observeSearchRequests() {
         searchJob?.cancel()
         searchJob = scope?.launch {
@@ -107,10 +109,17 @@ class SearchStateHolder @Inject constructor(
                         val currentFilter = _selectedSearchFilter.value
                         val local = withContext(Dispatchers.IO) {
                             musicRepository.searchAll(normalizedQuery, currentFilter).first()
-                        }
-                        if (request.requestId != latestSearchRequestId.get()) {
-                            return@collectLatest
-                        }
+                        }.sortedWith(
+                            compareBy { result ->
+                                when (result) {
+                                    is SearchResultItem.SongItem -> 0
+                                    is SearchResultItem.AlbumItem -> 1
+                                    is SearchResultItem.ArtistItem -> 2
+                                    is SearchResultItem.PlaylistItem -> 3
+                                }
+                            }
+                        )
+                        if (request.requestId != latestSearchRequestId.get()) return@collectLatest
                         _searchResults.value = local.toImmutableList()
 
                         val fetchesOnline = request.fetchOnline &&
@@ -125,14 +134,12 @@ class SearchStateHolder @Inject constructor(
                             throw error
                         } catch (error: Exception) {
                             if (request.requestId == latestSearchRequestId.get()) {
-                                Log.e("SearchStateHolder", "Online search failed for query: $normalizedQuery", error)
+                                Timber.e(error, "Online search failed for query: $normalizedQuery")
                                 _searchStatus.value = SearchStatus.Failed
                             }
                             return@collectLatest
                         }
-                        if (request.requestId != latestSearchRequestId.get()) {
-                            return@collectLatest
-                        }
+                        if (request.requestId != latestSearchRequestId.get()) return@collectLatest
                         if (online.isNotEmpty()) {
                             val seen = local.mapNotNull { item ->
                                 (item as? SearchResultItem.SongItem)?.song?.id
@@ -147,7 +154,7 @@ class SearchStateHolder @Inject constructor(
                         // Superseded by a newer query; ignore.
                     } catch (e: Exception) {
                         if (request.requestId == latestSearchRequestId.get()) {
-                            Log.e("SearchStateHolder", "Error performing search for query: $normalizedQuery", e)
+                            Timber.e(e, "Error performing search for query: $normalizedQuery")
                             _searchStatus.value = SearchStatus.Failed
                         }
                     }
@@ -167,7 +174,7 @@ class SearchStateHolder @Inject constructor(
                 }
                 _searchHistory.value = history.toImmutableList()
             } catch (e: Exception) {
-                Log.e("SearchStateHolder", "Error loading search history", e)
+                Timber.e(e, "Error loading search history")
             }
         }
     }
@@ -181,7 +188,7 @@ class SearchStateHolder @Inject constructor(
                     }
                     loadSearchHistory()
                 } catch (e: Exception) {
-                    Log.e("SearchStateHolder", "Error adding search history item", e)
+                    Timber.e(e, "Error adding search history item")
                 }
             }
         }
@@ -212,7 +219,7 @@ class SearchStateHolder @Inject constructor(
                 }
                 loadSearchHistory()
             } catch (e: Exception) {
-                Log.e("SearchStateHolder", "Error deleting search history item", e)
+                Timber.e(e, "Error deleting search history item")
             }
         }
     }
@@ -225,7 +232,7 @@ class SearchStateHolder @Inject constructor(
                 }
                 _searchHistory.value = persistentListOf()
             } catch (e: Exception) {
-                Log.e("SearchStateHolder", "Error clearing search history", e)
+                Timber.e(e, "Error clearing search history")
             }
         }
     }

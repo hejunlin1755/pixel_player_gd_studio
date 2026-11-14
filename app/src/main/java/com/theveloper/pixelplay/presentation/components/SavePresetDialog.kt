@@ -17,6 +17,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
+import androidx.compose.ui.res.stringResource
+import com.theveloper.pixelplay.R
+import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
 fun SavePresetDialog(
@@ -29,12 +32,12 @@ fun SavePresetDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(text = "Save Custom Preset", fontFamily = GoogleSansRounded)
+            Text(text = stringResource(R.string.equalizer_presets_save_custom_title), fontFamily = GoogleSansRounded)
         },
         text = {
             Column {
                 Text(
-                    text = "Enter a name for your custom equalizer preset.",
+                    text = stringResource(R.string.equalizer_presets_save_custom_body),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
@@ -44,14 +47,14 @@ fun SavePresetDialog(
                         name = it
                         isError = false
                     },
-                    label = { Text("Preset Name") },
+                    label = { Text(stringResource(R.string.equalizer_preset_name_placeholder)) },
                     singleLine = true,
                     isError = isError,
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (isError) {
                     Text(
-                        text = "Name cannot be empty",
+                        text = stringResource(R.string.equalizer_error_name_empty),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 4.dp)
@@ -70,12 +73,12 @@ fun SavePresetDialog(
                     }
                 }
             ) {
-                Text("Save")
+                Text(stringResource(R.string.common_save))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     )
@@ -93,7 +96,7 @@ fun RenamePresetDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(text = "Rename Preset", fontFamily = GoogleSansRounded)
+            Text(text = stringResource(R.string.equalizer_presets_rename_title), fontFamily = GoogleSansRounded)
         },
         text = {
             Column {
@@ -103,14 +106,14 @@ fun RenamePresetDialog(
                         name = it
                         isError = false
                     },
-                    label = { Text("Preset Name") },
+                    label = { Text(stringResource(R.string.equalizer_preset_name_placeholder)) },
                     singleLine = true,
                     isError = isError,
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (isError) {
                     Text(
-                        text = "Name cannot be empty",
+                        text = stringResource(R.string.equalizer_error_name_empty),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 4.dp)
@@ -129,12 +132,12 @@ fun RenamePresetDialog(
                     }
                 }
             ) {
-                Text("Rename")
+                Text(stringResource(R.string.equalizer_action_rename))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.common_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     )

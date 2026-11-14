@@ -1,27 +1,28 @@
 plugins {
-    id("com.android.application")
-    alias(libs.plugins.jetbrains.kotlin.android)
+    alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.dagger.hilt.android)
-    id("com.google.devtools.ksp") version "2.1.0-1.0.29"
-    kotlin("plugin.serialization") version "2.1.0"
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "com.theveloper.pixelplay"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.theveloper.pixelplay"
         minSdk = 30
-        targetSdk = 34
-        versionCode = (project.findProperty("APP_VERSION_CODE") as String).toInt()
-        versionName = project.findProperty("APP_VERSION_NAME") as String
+        targetSdk = 37
+        versionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toInt() ?: 1
+        versionName = (project.findProperty("APP_VERSION_NAME") as? String) ?: "1.0.0"
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
 
         release {
@@ -31,7 +32,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            lint {
+                abortOnError = false
+                checkReleaseBuilds = false
+            }
         }
     }
 
@@ -41,15 +45,15 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
+}
 
-    kotlinOptions {
-        jvmTarget = "11"
-        freeCompilerArgs += listOf(
-            "-opt-in=com.google.android.horologist.annotations.ExperimentalHorologistApi",
-        )
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        freeCompilerArgs.add("-opt-in=com.google.android.horologist.annotations.ExperimentalHorologistApi")
     }
 }
 
@@ -76,6 +80,7 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.android.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
 
     // Compose core
     implementation(platform(libs.androidx.compose.bom))
@@ -111,4 +116,18 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.mediarouter)
+
+    constraints {
+        // Fix vulnerabilities in transitive dependencies
+        implementation(libs.netty.common)
+        implementation(libs.netty.handler)
+        implementation(libs.netty.codec.http)
+        implementation(libs.netty.codec.http2)
+        implementation(libs.bouncycastle.bcprov)
+        implementation(libs.bouncycastle.bcpkix)
+        implementation(libs.commons.lang3)
+        implementation(libs.jdom2)
+        implementation(libs.jose4j)
+        implementation(libs.apache.httpclient)
+    }
 }

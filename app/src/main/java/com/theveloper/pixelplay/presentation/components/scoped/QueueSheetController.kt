@@ -26,11 +26,14 @@ internal class QueueSheetController(
     private val minFlingTravelPxProvider: () -> Float,
     private val dragThresholdPxProvider: () -> Float,
     private val showQueueSheetProvider: () -> Boolean,
-    private val onShowQueueSheetChange: (Boolean) -> Unit
+    private val onShowQueueSheetChange: (Boolean) -> Unit,
+    private val onIsCollapsingChange: (Boolean) -> Unit,
+    private val animationSpec: androidx.compose.animation.core.AnimationSpec<Float>
 ) {
     private var dragOffsetCache: Float? = null
     private var pendingDragTarget: Float? = null
     private var dragSnapJob: Job? = null
+    private var isCollapsing = false
 
     private fun resetDragPipeline() {
         dragOffsetCache = null
@@ -69,12 +72,14 @@ internal class QueueSheetController(
         } else {
             hiddenOffset
         }
-        queueSheetOffset.snapTo(targetOffset)
+        if (!isCollapsing) {
+            queueSheetOffset.snapTo(targetOffset)
+        }
     }
 
     suspend fun syncCollapsedWhenHidden() {
         val hiddenOffset = hiddenOffsetProvider()
-        if (!showQueueSheetProvider() && hiddenOffset > 0f && queueSheetOffset.value != hiddenOffset) {
+        if (!showQueueSheetProvider() && !isCollapsing && hiddenOffset > 0f && queueSheetOffset.value != hiddenOffset) {
             queueSheetOffset.snapTo(hiddenOffset)
         }
     }
@@ -97,7 +102,11 @@ internal class QueueSheetController(
         }
         val target = if (targetExpanded) 0f else hiddenOffset
         val shouldPrewarmFirstFrame = targetExpanded && !showQueueSheetProvider()
-        onShowQueueSheetChange(true)
+        if (!targetExpanded) {
+            isCollapsing = true
+            onIsCollapsingChange(true)
+        }
+        onShowQueueSheetChange(targetExpanded)
         if (shouldPrewarmFirstFrame) {
             queueSheetOffset.snapTo(hiddenOffset)
             if (coroutineContext[MonotonicFrameClock] != null) {
@@ -106,24 +115,18 @@ internal class QueueSheetController(
                 yield()
             }
         }
-        val travelFraction = if (hiddenOffset > 0f) {
-            (abs(queueSheetOffset.value - target) / hiddenOffset).coerceIn(0f, 1f)
-        } else {
-            1f
-        }
-        val durationMillis = if (targetExpanded) {
-            (220f + (120f * travelFraction)).toInt()
-        } else {
-            (190f + (110f * travelFraction)).toInt()
-        }
-        queueSheetOffset.animateTo(
-            targetValue = target,
-            animationSpec = tween(
-                durationMillis = durationMillis,
-                easing = FastOutSlowInEasing
+        try {
+            queueSheetOffset.animateTo(
+                targetValue = target,
+                animationSpec = animationSpec
             )
-        )
-        onShowQueueSheetChange(targetExpanded)
+        } finally {
+            onShowQueueSheetChange(targetExpanded)
+            if (!targetExpanded) {
+                isCollapsing = false
+                onIsCollapsingChange(false)
+            }
+        }
     }
 
     fun animate(targetExpanded: Boolean) {
@@ -159,19 +162,30 @@ internal class QueueSheetController(
         resetDragPipeline()
 
         val isFastUpward = velocity < -520f
-        val isFastDownward = velocity > 700f
+        val isFastDownward = velocity > 450f
         val minFlingTravelPx = minFlingTravelPxProvider()
         val hasMeaningfulUpwardTravel = totalDrag < -minFlingTravelPx
         // Quick upward flicks on full player can be short in travel but high in intent.
         val hasQuickUpwardTravel = totalDrag < -(minFlingTravelPx * 0.35f)
         val shouldExpandFromQuickFling = isFastUpward && hasQuickUpwardTravel
         val dragThresholdPx = dragThresholdPxProvider()
-        val shouldExpand = shouldExpandFromQuickFling ||
-            (isFastUpward && hasMeaningfulUpwardTravel) ||
-            (!isFastDownward && (
-                settledOffset < hiddenOffset - dragThresholdPx ||
-                    totalDrag < -dragThresholdPx
-                ))
+
+        // Directional intent: a clear drag past the threshold in either direction
+        // commits to that direction. This makes dismissing from the header reliable
+        // (downward drag past threshold → close) while still letting upward drags
+        // from the closed state open the sheet.
+        val hasCommittedDownwardDrag = totalDrag > dragThresholdPx
+        val hasCommittedUpwardDrag = totalDrag < -dragThresholdPx
+
+        val shouldExpand = when {
+            shouldExpandFromQuickFling -> true
+            isFastUpward && hasMeaningfulUpwardTravel -> true
+            isFastDownward -> false
+            hasCommittedDownwardDrag -> false
+            hasCommittedUpwardDrag -> true
+            // Tiny residual drag: snap to whichever half the sheet ended in.
+            else -> settledOffset < hiddenOffset * 0.5f
+        }
 
         animate(shouldExpand)
     }

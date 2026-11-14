@@ -30,10 +30,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         QqMusicPlaylistEntity::class,
         NavidromeSongEntity::class,
         NavidromePlaylistEntity::class,
-        TelegramTopicEntity::class
+        TelegramTopicEntity::class,
+        JellyfinSongEntity::class,
+        JellyfinPlaylistEntity::class,
+        AiCacheEntity::class,
+        AiUsageEntity::class
     ],
-         version = 36, // Add songs FTS table for indexed title/artist search
-
+    version = 42,
     exportSchema = true
 )
 abstract class PixelPlayDatabase : RoomDatabase() {
@@ -50,6 +53,9 @@ abstract class PixelPlayDatabase : RoomDatabase() {
     abstract fun localPlaylistDao(): LocalPlaylistDao
     abstract fun qqmusicDao(): QqMusicDao
     abstract fun navidromeDao(): NavidromeDao
+    abstract fun jellyfinDao(): JellyfinDao
+    abstract fun aiCacheDao(): AiCacheDao
+    abstract fun aiUsageDao(): AiUsageDao
 
     companion object {
         // Gap-bridging no-op migrations for missing version ranges.
@@ -532,6 +538,214 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                 installFavoriteSyncTriggers(db)
             }
         }
+        
+        val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS ai_cache (
+                        promptHash TEXT NOT NULL PRIMARY KEY,
+                        responseJson TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `jellyfin_songs` (
+                        `id` TEXT NOT NULL,
+                        `jellyfin_id` TEXT NOT NULL,
+                        `playlist_id` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `artist` TEXT NOT NULL,
+                        `artist_id` TEXT,
+                        `album` TEXT NOT NULL,
+                        `album_id` TEXT,
+                        `duration` INTEGER NOT NULL,
+                        `track_number` INTEGER NOT NULL,
+                        `disc_number` INTEGER NOT NULL,
+                        `year` INTEGER NOT NULL,
+                        `genre` TEXT,
+                        `bitRate` INTEGER,
+                        `mime_type` TEXT,
+                        `path` TEXT NOT NULL,
+                        `date_added` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_jellyfin_songs_jellyfin_id` ON `jellyfin_songs` (`jellyfin_id`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_jellyfin_songs_playlist_id` ON `jellyfin_songs` (`playlist_id`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_jellyfin_songs_playlist_id_date_added` ON `jellyfin_songs` (`playlist_id`, `date_added`)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `jellyfin_playlists` (
+                        `id` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `song_count` INTEGER NOT NULL,
+                        `duration` INTEGER NOT NULL,
+                        `last_sync_time` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+            }
+        }
+
+        val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS ai_usage (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        timestamp INTEGER NOT NULL,
+                        provider TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        promptType TEXT NOT NULL,
+                        promptTokens INTEGER NOT NULL,
+                        outputTokens INTEGER NOT NULL,
+                        thoughtTokens INTEGER NOT NULL
+                    )
+                """.trimIndent())
+            }
+        }
+
+        val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_file_path ON songs(file_path)")
+            }
+        }
+
+        val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_songs_parent_directory_path_source_type_album_id " +
+                        "ON songs(parent_directory_path, source_type, album_id)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_songs_parent_directory_path_source_type_id " +
+                        "ON songs(parent_directory_path, source_type, id)"
+                )
+            }
+        }
+
+        val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if ("album_artist" !in getTableColumns(db, "albums")) {
+                    db.execSQL("ALTER TABLE albums ADD COLUMN album_artist TEXT DEFAULT NULL")
+                }
+                db.execSQL(
+                    """
+                    UPDATE albums
+                    SET album_artist = (
+                        SELECT s.album_artist
+                        FROM songs s
+                        WHERE s.album_id = albums.id
+                          AND s.album_artist IS NOT NULL
+                          AND TRIM(s.album_artist) != ''
+                        GROUP BY s.album_artist
+                        ORDER BY COUNT(*) DESC, LENGTH(s.album_artist) DESC
+                        LIMIT 1
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_albums_album_artist ON albums(album_artist)")
+            }
+        }
+
+        val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Recreate navidrome_songs table to change disc_number to NOT NULL (Room expected)
+                db.execSQL("DROP TABLE IF EXISTS navidrome_songs_new")
+                db.execSQL(
+                    """
+                        CREATE TABLE navidrome_songs_new (
+                            id TEXT NOT NULL PRIMARY KEY,
+                            navidrome_id TEXT NOT NULL,
+                            playlist_id TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            artist TEXT NOT NULL,
+                            artist_id TEXT,
+                            album TEXT NOT NULL,
+                            album_id TEXT,
+                            cover_art_id TEXT,
+                            duration INTEGER NOT NULL,
+                            track_number INTEGER NOT NULL,
+                            disc_number INTEGER NOT NULL,
+                            year INTEGER NOT NULL,
+                            genre TEXT,
+                            bitRate INTEGER,
+                            mime_type TEXT,
+                            suffix TEXT,
+                            path TEXT NOT NULL,
+                            date_added INTEGER NOT NULL
+                        )
+                    """.trimIndent()
+                )
+
+                if (tableExists(db, "navidrome_songs")) {
+                    val columns = getTableColumns(db, "navidrome_songs")
+                    val artistIdExpr = columnExpr(columns, "artist_id", "NULL")
+                    val albumIdExpr = columnExpr(columns, "album_id", "NULL")
+                    val coverArtIdExpr = columnExpr(columns, "cover_art_id", "NULL")
+                    val genreExpr = columnExpr(columns, "genre", "NULL")
+                    val bitRateExpr = columnExpr(columns, "bitRate", "NULL")
+                    val mimeTypeExpr = columnExpr(columns, "mime_type", "NULL")
+                    val suffixExpr = columnExpr(columns, "suffix", "NULL")
+                    val discNumberExpr = if ("disc_number" in columns) "COALESCE(disc_number, 0)" else "0"
+
+                    db.execSQL(
+                        """
+                            INSERT OR REPLACE INTO navidrome_songs_new (
+                                id,
+                                navidrome_id,
+                                playlist_id,
+                                title,
+                                artist,
+                                artist_id,
+                                album,
+                                album_id,
+                                cover_art_id,
+                                duration,
+                                track_number,
+                                disc_number,
+                                year,
+                                genre,
+                                bitRate,
+                                mime_type,
+                                suffix,
+                                path,
+                                date_added
+                            )
+                            SELECT
+                                id,
+                                navidrome_id,
+                                playlist_id,
+                                title,
+                                artist,
+                                $artistIdExpr,
+                                album,
+                                $albumIdExpr,
+                                $coverArtIdExpr,
+                                duration,
+                                track_number,
+                                $discNumberExpr,
+                                year,
+                                $genreExpr,
+                                $bitRateExpr,
+                                $mimeTypeExpr,
+                                $suffixExpr,
+                                path,
+                                date_added
+                            FROM navidrome_songs
+                        """.trimIndent()
+                    )
+
+                    db.execSQL("DROP TABLE navidrome_songs")
+                }
+
+                db.execSQL("ALTER TABLE navidrome_songs_new RENAME TO navidrome_songs")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_navidrome_id ON navidrome_songs(navidrome_id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_playlist_id ON navidrome_songs(playlist_id)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_playlist_id_date_added ON navidrome_songs(playlist_id, date_added)")
+            }
+        }
 
         private fun ensureSongsTableHasDateAdded(db: SupportSQLiteDatabase) {
             if (!tableExists(db, "songs")) {
@@ -701,15 +915,45 @@ abstract class PixelPlayDatabase : RoomDatabase() {
         }
 
         private fun createSongsEntityIndexes(db: SupportSQLiteDatabase) {
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_title ON songs(title)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_album_id ON songs(album_id)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_artist_id ON songs(artist_id)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_artist_name ON songs(artist_name)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_genre ON songs(genre)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_parent_directory_path ON songs(parent_directory_path)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_content_uri_string ON songs(content_uri_string)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_date_added ON songs(date_added)")
-            db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_duration ON songs(duration)")
+            val columns = getTableColumns(db, "songs")
+
+            fun createIndexIfColumnExists(columnName: String, indexName: String) {
+                if (columnName in columns) {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS $indexName ON songs($columnName)")
+                }
+            }
+
+            fun createCompositeIndexIfColumnsExist(indexName: String, vararg columnNames: String) {
+                if (columnNames.all(columns::contains)) {
+                    db.execSQL(
+                        "CREATE INDEX IF NOT EXISTS $indexName ON songs(${columnNames.joinToString(", ")})"
+                    )
+                }
+            }
+
+            createIndexIfColumnExists("title", "index_songs_title")
+            createIndexIfColumnExists("album_id", "index_songs_album_id")
+            createIndexIfColumnExists("artist_id", "index_songs_artist_id")
+            createIndexIfColumnExists("artist_name", "index_songs_artist_name")
+            createIndexIfColumnExists("genre", "index_songs_genre")
+            createIndexIfColumnExists("parent_directory_path", "index_songs_parent_directory_path")
+            createIndexIfColumnExists("file_path", "index_songs_file_path")
+            createIndexIfColumnExists("content_uri_string", "index_songs_content_uri_string")
+            createIndexIfColumnExists("date_added", "index_songs_date_added")
+            createIndexIfColumnExists("duration", "index_songs_duration")
+            createIndexIfColumnExists("source_type", "index_songs_source_type")
+            createCompositeIndexIfColumnsExist(
+                "index_songs_parent_directory_path_source_type_album_id",
+                "parent_directory_path",
+                "source_type",
+                "album_id"
+            )
+            createCompositeIndexIfColumnsExist(
+                "index_songs_parent_directory_path_source_type_id",
+                "parent_directory_path",
+                "source_type",
+                "id"
+            )
         }
 
         private fun recreatePlaylistsTable(db: SupportSQLiteDatabase) {
@@ -1112,7 +1356,7 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                         cover_art_id TEXT,
                         duration INTEGER NOT NULL,
                         track_number INTEGER NOT NULL,
-                        disc_number INTEGER,
+                        disc_number INTEGER NOT NULL,
                         year INTEGER NOT NULL,
                         genre TEXT,
                         bitRate INTEGER,
@@ -1185,7 +1429,7 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                                 $coverArtIdExpr,
                                 duration,
                                 track_number,
-                                disc_number,
+                                COALESCE(disc_number, 0),
                                 year,
                                 $genreExpr,
                                 $bitRateExpr,

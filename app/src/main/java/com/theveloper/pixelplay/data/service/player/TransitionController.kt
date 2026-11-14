@@ -50,9 +50,28 @@ class TransitionController @Inject constructor(
             currentObservedPlayer = newPlayer
             newPlayer.addListener(listener)
 
-            // Trigger check for the new player immediately
+            // Delay before scheduling so the incoming track's duration has time to resolve
+            // and currentPosition stabilizes. Without this, scheduleTransitionFor reads
+            // C.TIME_UNSET for duration, waits, then finds currentPosition already past
+            // transitionPoint and fires another crossfade immediately on the new track.
             if (newPlayer.isPlaying) {
-                newPlayer.currentMediaItem?.let { scheduleTransitionFor(it) }
+                val item = newPlayer.currentMediaItem
+                if (item != null) {
+                    scope.launch {
+                        delay(1_000L)
+                        // Re-check both that this is still the observed player AND that the
+                        // track hasn't changed during the delay. If the user skipped while
+                        // we were waiting, currentMediaItem will differ from the captured
+                        // item and we must not schedule a transition for the stale track.
+                        // onMediaItemTransition will have already fired for the new track,
+                        // so we can safely drop this work.
+                        if (currentObservedPlayer === newPlayer &&
+                            newPlayer.currentMediaItem?.mediaId == item.mediaId
+                        ) {
+                            scheduleTransitionFor(item)
+                        }
+                    }
+                }
             }
         }
     }
@@ -69,11 +88,9 @@ class TransitionController @Inject constructor(
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 Timber.tag("TransitionDebug").d("onMediaItemTransition: %s (reason=%d)", mediaItem?.mediaId, reason)
                 // When we naturally move to a new song, ensure pauseAtEnd is OFF by default.
-                engine.setPauseAtEndOfMediaItems(false)
+                engine.setPauseAtEndOfMediaItems(shouldPause = false)
 
-                if (mediaItem != null) {
-                    scheduleTransitionFor(mediaItem)
-                }
+                mediaItem?.let { scheduleTransitionFor(it) }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -115,39 +132,36 @@ class TransitionController @Inject constructor(
         // Cancel any existing job first and reset pauseAtEnd so a stale `true`
         // from the previous job doesn't cause an unexpected pause.
         transitionSchedulerJob?.cancel()
-        engine.setPauseAtEndOfMediaItems(false)
+        engine.setPauseAtEndOfMediaItems(shouldPause = false)
 
         transitionSchedulerJob = scope.launch {
-            // WAIT for any active transition to finish.
-            // If we proceed immediately, we might call prepareNext() which resets playerB.
-            // But during a crossfade, playerB is the "Outgoing Player", so resetting it kills the fade.
-            while (engine.isTransitionRunning()) {
-                Timber.tag("TransitionDebug").d("Waiting for active transition to finish before scheduling next...")
-                delay(500)
+            // If a transition is currently running, cancel it immediately.
+            // We are on a new track (or starting fresh), so the old crossfade is stale.
+            if (engine.isTransitionRunning()) {
+                Timber.tag("TransitionDebug").d("Cancelling active transition to schedule next...")
+                engine.cancelNext()
             }
+
+            // Debounce preparing the next track during rapid skips
+            delay(1500)
 
             val player = engine.masterPlayer
             val repeatMode = player.repeatMode
-            val nextIndex = player.currentMediaItemIndex + 1
-
-            val nextMediaItem = when (repeatMode) {
-                Player.REPEAT_MODE_ONE -> currentMediaItem // Loop the same track
-                else -> if (nextIndex < player.mediaItemCount) player.getMediaItemAt(nextIndex) else null
-            }
+            val transitionTarget = engine.getNextTransitionTarget(currentMediaItem, repeatMode)
 
             // If there is no next track and we're not looping, cancel any pending transition and stop.
-            if (nextMediaItem == null) {
+            if (transitionTarget == null) {
                 Timber.tag("TransitionDebug").d(
-                    "No next track (index=%d, count=%d, repeatMode=%d). No transition.",
-                    nextIndex, player.mediaItemCount, repeatMode
+                    "No next track (currentIndex=%d, count=%d, repeatMode=%d). No transition.",
+                    player.currentMediaItemIndex,
+                    player.mediaItemCount,
+                    repeatMode,
                 )
                 engine.cancelNext()
                 return@launch
             }
 
-            val targetIndex = if (repeatMode == Player.REPEAT_MODE_ONE) player.currentMediaItemIndex else nextIndex
-            Timber.tag("TransitionDebug").d("Preparing next track: %s (Index: %d)", nextMediaItem.mediaId, targetIndex)
-            engine.prepareNext(nextMediaItem)
+            val nextMediaItem = transitionTarget.mediaItem
 
             val playlistId = currentMediaItem.mediaMetadata.extras?.getString("playlistId")
             val fromTrackId = currentMediaItem.mediaId
@@ -171,7 +185,7 @@ class TransitionController @Inject constructor(
                 }
             }
 
-            kotlinx.coroutines.flow.combine(settingsFlow, isCrossfadeEnabledFlow) { resolution, isEnabled ->
+            combine(settingsFlow, isCrossfadeEnabledFlow) { resolution, isEnabled ->
                 Pair(resolution, isEnabled)
             }.distinctUntilChanged() // Crucial: prevents restarting the job if the same settings are emitted again
             .collectLatest { (resolution, isEnabled) ->
@@ -187,16 +201,21 @@ class TransitionController @Inject constructor(
                 // If globally disabled and we are using the global defaults, use no transition.
                 if (isGloballyDisabled) {
                     Timber.tag("TransitionDebug").d("Crossfade globally disabled. Using default gap.")
-                    engine.setPauseAtEndOfMediaItems(false)
+                    engine.cancelNext()
+                    engine.setPauseAtEndOfMediaItems(shouldPause = false)
                     return@collectLatest
                 }
 
                 // If transition is disabled or has no duration, do nothing.
                 if (settings.mode == TransitionMode.NONE || settings.durationMs <= 0) {
                     Timber.tag("TransitionDebug").d("Transition disabled or zero duration.")
-                    engine.setPauseAtEndOfMediaItems(false)
+                    engine.cancelNext()
+                    engine.setPauseAtEndOfMediaItems(shouldPause = false)
                     return@collectLatest
                 }
+
+                Timber.tag("TransitionDebug").d("Preparing next track for overlap: %s", nextMediaItem.mediaId)
+                engine.prepareNext(transitionTarget)
 
                 // Wait for the player to report a valid duration.
                 var duration = player.duration
@@ -213,6 +232,7 @@ class TransitionController @Inject constructor(
 
                 if (duration < minFade + guardWindow) {
                     Timber.tag("TransitionDebug").w("Track too short for crossfade (duration=%d).", duration)
+                    engine.cancelNext()
                     engine.setPauseAtEndOfMediaItems(false)
                     return@collectLatest
                 }
@@ -231,30 +251,33 @@ class TransitionController @Inject constructor(
 
                 // --- CRITICAL FIX: Enable Pause At End ---
                 // We want to control the transition manually, so we prevent auto-advance.
-                engine.setPauseAtEndOfMediaItems(true)
+                engine.setPauseAtEndOfMediaItems(shouldPause = true)
                 Timber.tag("TransitionDebug").d("Enabled pauseAtEndOfMediaItems to prevent auto-skip.")
 
                 if (transitionPoint <= player.currentPosition) {
-                    val remaining = duration - player.currentPosition
-                    val adjustedDuration = (remaining - guardWindow).coerceAtLeast(minFade)
-                    if (remaining > guardWindow + minFade / 2) {
+                    val remaining = (duration - player.currentPosition).coerceAtLeast(0L)
+                    if (remaining > 0L) {
+                        val adjustedDuration = remaining.coerceAtMost(effectiveDuration)
                         Timber.tag("TransitionDebug").w("Already past transition point! Triggering immediately.")
                         engine.performTransition(settings.copy(durationMs = adjustedDuration.toInt()))
                     } else {
                         Timber.tag("TransitionDebug").w("Too close to end (%d ms left). Skipping to avoid glitch.", remaining)
-                        engine.setPauseAtEndOfMediaItems(false)
+                        engine.cancelNext()
+                        engine.setPauseAtEndOfMediaItems(shouldPause = false)
                     }
                     return@collectLatest
                 }
 
-                // Wait loop with adaptive sleep
+                // Wait loop with adaptive sleep. 250ms near-end cadence still lands the crossfade
+                // within ±125ms of the target — imperceptible for a multi-second overlap, and 5×
+                // fewer wakeups in the last second of every track.
                 while (player.currentPosition < transitionPoint && isActive) {
                     val remaining = transitionPoint - player.currentPosition
                     val sleep = when {
                         remaining > 5000 -> 1000L
                         remaining > 1000 -> 250L
-                        else -> 50L // Tight loop near the end
-                    }
+                        else -> 50L
+                    }.coerceAtMost(remaining).coerceAtLeast(1L)
                     if (remaining < 2000 && remaining % 500 < 50) {
                         Timber.tag("TransitionDebug").v("Countdown: %d ms to transition", remaining)
                     }
@@ -263,11 +286,19 @@ class TransitionController @Inject constructor(
 
                 // Final check to ensure the job wasn't cancelled while waiting.
                 if (isActive) {
-                    Timber.tag("TransitionDebug").d("FIRING TRANSITION NOW!")
-                    engine.performTransition(settings.copy(durationMs = effectiveDuration.toInt()))
+                    val remaining = (duration - player.currentPosition).coerceAtLeast(0L)
+                    if (remaining > 0L) {
+                        val adjustedDuration = remaining.coerceAtMost(effectiveDuration)
+                        Timber.tag("TransitionDebug").d("FIRING TRANSITION NOW!")
+                        engine.performTransition(settings.copy(durationMs = adjustedDuration.toInt()))
+                    } else {
+                        Timber.tag("TransitionDebug").w("Too close to end (%d ms left). Skipping to avoid glitch.", remaining)
+                        engine.cancelNext()
+                        engine.setPauseAtEndOfMediaItems(shouldPause = false)
+                    }
                 } else {
                     Timber.tag("TransitionDebug").d("Job cancelled before firing.")
-                    engine.setPauseAtEndOfMediaItems(false)
+                    engine.setPauseAtEndOfMediaItems(shouldPause = false)
                 }
             }
         }

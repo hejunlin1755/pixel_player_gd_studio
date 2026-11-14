@@ -1,3 +1,4 @@
+@file:Suppress("DEPRECATION")
 package com.theveloper.pixelplay.data.service.player
 
 import androidx.media3.common.C
@@ -34,6 +35,9 @@ class SurroundDownmixProcessor : AudioProcessor {
         /** LFE (subwoofer) mix coefficient */
         private const val COEFF_LFE = 0.707f
 
+        /** Largest supported surround layout (7.1). */
+        private const val MAX_SUPPORTED_CHANNELS = 8
+
         // 5.1 channel indices (FFmpeg order)
         private const val FL_51  = 0
         private const val FR_51  = 1
@@ -57,17 +61,19 @@ class SurroundDownmixProcessor : AudioProcessor {
     private var outputFormat: AudioFormat = AudioFormat.NOT_SET
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
+    private val floatScratch = FloatArray(MAX_SUPPORTED_CHANNELS)
+    private val shortScratch = ShortArray(MAX_SUPPORTED_CHANNELS)
 
     override fun configure(inputAudioFormat: AudioFormat): AudioFormat {
         val isSupported = (inputAudioFormat.channelCount == 6 || inputAudioFormat.channelCount == 8)
-                && inputAudioFormat.encoding == C.ENCODING_PCM_16BIT
+                && (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
 
         return if (isSupported) {
             inputFormat = inputAudioFormat
             outputFormat = AudioFormat(
                 inputAudioFormat.sampleRate,
                 /* channelCount = */ 2,
-                C.ENCODING_PCM_16BIT
+                inputAudioFormat.encoding
             )
             outputFormat
         } else {
@@ -83,29 +89,62 @@ class SurroundDownmixProcessor : AudioProcessor {
         if (!isActive()) return
 
         val channelCount = inputFormat.channelCount
-        val bytesPerFrame = channelCount * Short.SIZE_BYTES
-        val frameCount = inputBuffer.remaining() / bytesPerFrame
 
-        // Stereo output: 2 channels × 2 bytes per frame
-        val requiredCapacity = frameCount * 2 * Short.SIZE_BYTES
-        if (outputBuffer.capacity() < requiredCapacity) {
-            outputBuffer = ByteBuffer.allocateDirect(requiredCapacity).order(ByteOrder.nativeOrder())
+        if (inputFormat.encoding == C.ENCODING_PCM_FLOAT) {
+            val bytesPerFrame = channelCount * Float.SIZE_BYTES
+            val frameCount = inputBuffer.remaining() / bytesPerFrame
+            outputBuffer = ensureOutputBuffer(frameCount * 2 * Float.SIZE_BYTES)
+
+            val floatInput = inputBuffer.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer()
+            repeat(frameCount) {
+                floatInput.get(floatScratch, 0, channelCount)
+                val left: Float
+                val right: Float
+                if (channelCount == 6) {
+                    left = downmix51Left(floatScratch)
+                    right = downmix51Right(floatScratch)
+                } else {
+                    left = downmix71Left(floatScratch)
+                    right = downmix71Right(floatScratch)
+                }
+                outputBuffer.putFloat(left.coerceIn(-1f, 1f))
+                outputBuffer.putFloat(right.coerceIn(-1f, 1f))
+            }
+            inputBuffer.position(inputBuffer.limit())
+        } else {
+            val bytesPerFrame = channelCount * Short.SIZE_BYTES
+            val frameCount = inputBuffer.remaining() / bytesPerFrame
+            outputBuffer = ensureOutputBuffer(frameCount * 2 * Short.SIZE_BYTES)
+
+            val shortInput = inputBuffer.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
+            repeat(frameCount) {
+                shortInput.get(shortScratch, 0, channelCount)
+                val left: Float
+                val right: Float
+                if (channelCount == 6) {
+                    left = downmix51Left(shortScratch)
+                    right = downmix51Right(shortScratch)
+                } else {
+                    left = downmix71Left(shortScratch)
+                    right = downmix71Right(shortScratch)
+                }
+                outputBuffer.putShort(left.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
+                outputBuffer.putShort(right.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
+            }
+            inputBuffer.position(inputBuffer.limit())
+        }
+        outputBuffer.flip()
+    }
+
+    private fun ensureOutputBuffer(requiredCapacity: Int): ByteBuffer {
+        return if (outputBuffer.capacity() < requiredCapacity) {
+            ByteBuffer.allocateDirect(requiredCapacity).order(ByteOrder.nativeOrder()).also {
+                outputBuffer = it
+            }
         } else {
             outputBuffer.clear()
+            outputBuffer
         }
-
-        val shortInput = inputBuffer.asShortBuffer()
-
-        repeat(frameCount) {
-            val samples = ShortArray(channelCount) { shortInput.get() }
-            val (left, right) = if (channelCount == 6) downmix51(samples) else downmix71(samples)
-
-            outputBuffer.putShort(left.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
-            outputBuffer.putShort(right.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
-        }
-
-        inputBuffer.position(inputBuffer.position() + frameCount * bytesPerFrame)
-        outputBuffer.flip()
     }
 
     override fun getOutput(): ByteBuffer {
@@ -118,6 +157,8 @@ class SurroundDownmixProcessor : AudioProcessor {
 
     override fun queueEndOfStream() { inputEnded = true }
 
+    @Deprecated("Media3 AudioProcessor now prefers flush(StreamMetadata); kept for interface compatibility")
+    @Suppress("DEPRECATION")
     override fun flush() {
         outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
@@ -129,25 +170,39 @@ class SurroundDownmixProcessor : AudioProcessor {
         outputFormat = AudioFormat.NOT_SET
     }
 
-    /**
-     * Applies the Dolby downmix matrix for 5.1 surround (FL, FR, FC, LFE, SL, SR).
-     *
-     * @return A [Pair] of (left, right) float samples ready for stereo output.
-     */
-    private fun downmix51(s: ShortArray): Pair<Float, Float> {
-        val left  = s[FL_51]  + COEFF_SURROUND * s[FC_51]  + COEFF_SURROUND * s[SL_51]  + COEFF_LFE * s[LFE_51]
-        val right = s[FR_51]  + COEFF_SURROUND * s[FC_51]  + COEFF_SURROUND * s[SR_51]  + COEFF_LFE * s[LFE_51]
-        return Pair(left, right)
+    /** Left channel for a 5.1 surround frame (FL, FR, FC, LFE, SL, SR). */
+    private fun downmix51Left(s: ShortArray): Float {
+        return s[FL_51] + COEFF_SURROUND * s[FC_51] + COEFF_SURROUND * s[SL_51] + COEFF_LFE * s[LFE_51]
     }
 
-    /**
-     * Applies the Dolby downmix matrix for 7.1 surround (FL, FR, FC, LFE, SL, SR, SBL, SBR).
-     *
-     * @return A [Pair] of (left, right) float samples ready for stereo output.
-     */
-    private fun downmix71(s: ShortArray): Pair<Float, Float> {
-        val left  = s[FL_71]  + COEFF_SURROUND * s[FC_71]  + COEFF_SURROUND * s[SL_71]  + COEFF_SURROUND * s[SBL_71] + COEFF_LFE * s[LFE_71]
-        val right = s[FR_71]  + COEFF_SURROUND * s[FC_71]  + COEFF_SURROUND * s[SR_71]  + COEFF_SURROUND * s[SBR_71] + COEFF_LFE * s[LFE_71]
-        return Pair(left, right)
+    /** Right channel for a 5.1 surround frame (FL, FR, FC, LFE, SL, SR). */
+    private fun downmix51Right(s: ShortArray): Float {
+        return s[FR_51] + COEFF_SURROUND * s[FC_51] + COEFF_SURROUND * s[SR_51] + COEFF_LFE * s[LFE_51]
+    }
+
+    /** Left channel for a 7.1 surround frame (FL, FR, FC, LFE, SL, SR, SBL, SBR). */
+    private fun downmix71Left(s: ShortArray): Float {
+        return s[FL_71] + COEFF_SURROUND * s[FC_71] + COEFF_SURROUND * s[SL_71] + COEFF_SURROUND * s[SBL_71] + COEFF_LFE * s[LFE_71]
+    }
+
+    /** Right channel for a 7.1 surround frame (FL, FR, FC, LFE, SL, SR, SBL, SBR). */
+    private fun downmix71Right(s: ShortArray): Float {
+        return s[FR_71] + COEFF_SURROUND * s[FC_71] + COEFF_SURROUND * s[SR_71] + COEFF_SURROUND * s[SBR_71] + COEFF_LFE * s[LFE_71]
+    }
+
+    private fun downmix51Left(s: FloatArray): Float {
+        return s[FL_51] + COEFF_SURROUND * s[FC_51] + COEFF_SURROUND * s[SL_51] + COEFF_LFE * s[LFE_51]
+    }
+
+    private fun downmix51Right(s: FloatArray): Float {
+        return s[FR_51] + COEFF_SURROUND * s[FC_51] + COEFF_SURROUND * s[SR_51] + COEFF_LFE * s[LFE_51]
+    }
+
+    private fun downmix71Left(s: FloatArray): Float {
+        return s[FL_71] + COEFF_SURROUND * s[FC_71] + COEFF_SURROUND * s[SL_71] + COEFF_SURROUND * s[SBL_71] + COEFF_LFE * s[LFE_71]
+    }
+
+    private fun downmix71Right(s: FloatArray): Float {
+        return s[FR_71] + COEFF_SURROUND * s[FC_71] + COEFF_SURROUND * s[SR_71] + COEFF_SURROUND * s[SBR_71] + COEFF_LFE * s[LFE_71]
     }
 }
