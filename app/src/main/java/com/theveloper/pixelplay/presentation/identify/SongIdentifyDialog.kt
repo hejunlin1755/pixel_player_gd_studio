@@ -2,7 +2,6 @@ package com.theveloper.pixelplay.presentation.identify
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -27,13 +26,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ScreenShare
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.ScreenShare
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,7 +63,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.theveloper.pixelplay.data.identify.IdentifySource
 import com.theveloper.pixelplay.presentation.components.SmartImage
 import kotlinx.coroutines.delay
 
@@ -81,30 +75,10 @@ fun SongIdentifyDialog(
     val phase by viewModel.phase.collectAsStateWithLifecycle()
     val level by viewModel.level.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var pending by remember { mutableStateOf<IdentifySource?>(null) }
     var heard by remember { mutableFloatStateOf(0f) }
-    val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val consent = result.data
-        if (result.resultCode == android.app.Activity.RESULT_OK && consent != null) {
-            viewModel.listenPlayback(result.resultCode, consent)
-        } else {
-            viewModel.fail("没有允许录制屏幕声音")
-        }
-    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val source = pending
-        pending = null
-        if (!granted || source == null) {
-            viewModel.fail("需要麦克风权限才能听歌识曲")
-            return@rememberLauncherForActivityResult
-        }
-        when (source) {
-            IdentifySource.Microphone -> viewModel.listenMicrophone()
-            IdentifySource.Playback -> {
-                val manager = context.getSystemService(MediaProjectionManager::class.java)
-                projectionLauncher.launch(manager.createScreenCaptureIntent())
-            }
-        }
+        if (granted) viewModel.listenMicrophone()
+        else viewModel.fail("需要麦克风权限才能听歌识曲")
     }
     DisposableEffect(viewModel) {
         onDispose { viewModel.stop() }
@@ -123,21 +97,11 @@ fun SongIdentifyDialog(
         }
     }
 
-    fun begin(source: IdentifySource) {
+    fun begin() {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            pending = source
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            return
-        }
-        when (source) {
-            IdentifySource.Microphone -> viewModel.listenMicrophone()
-            IdentifySource.Playback -> {
-                val manager = context.getSystemService(MediaProjectionManager::class.java)
-                projectionLauncher.launch(manager.createScreenCaptureIntent())
-            }
-        }
+        if (granted) viewModel.listenMicrophone()
+        else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     Dialog(
@@ -163,7 +127,7 @@ fun SongIdentifyDialog(
                     }
                 }
                 Text(
-                    text = "免费识别。麦克风听周围的歌，屏幕声音听手机里正在放的歌。",
+                    text = "对着外面的歌录一段，发给免费的在线识别服务。不比对手机里已经有的歌。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -185,14 +149,10 @@ fun SongIdentifyDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             text = when (current) {
-                                IdentifyPhase.Ready -> "选一种方式，动画会跟着声音动"
-                                is IdentifyPhase.Listening -> if (current.source == IdentifySource.Microphone) {
-                                    "正在听周围的声音"
-                                } else {
-                                    "正在听屏幕里的声音"
-                                }
-                                IdentifyPhase.Matching -> "正在比对这首歌"
-                                is IdentifyPhase.Found -> "认出来了"
+                                IdentifyPhase.Ready -> "点下面开始听"
+                                is IdentifyPhase.Listening -> "正在听，圆环会跟着转"
+                                IdentifyPhase.Matching -> "正在发给在线识别"
+                                is IdentifyPhase.Found -> "在线认出来了"
                                 is IdentifyPhase.Failed -> current.message
                             },
                             style = MaterialTheme.typography.titleMedium,
@@ -209,15 +169,9 @@ fun SongIdentifyDialog(
                             FoundCard(phase = current, onSearch = onSearch)
                         }
                         if (current !is IdentifyPhase.Listening && current !is IdentifyPhase.Matching && current !is IdentifyPhase.Found) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                FilledTonalButton(onClick = { begin(IdentifySource.Microphone) }) {
-                                    Icon(Icons.Rounded.Mic, contentDescription = null)
-                                    Text("麦克风", modifier = Modifier.padding(start = 8.dp))
-                                }
-                                Button(onClick = { begin(IdentifySource.Playback) }) {
-                                    Icon(Icons.AutoMirrored.Rounded.ScreenShare, contentDescription = null)
-                                    Text("屏幕声音", modifier = Modifier.padding(start = 8.dp))
-                                }
+                            Button(onClick = { begin() }) {
+                                Icon(Icons.Rounded.Mic, contentDescription = null)
+                                Text("开始听", modifier = Modifier.padding(start = 8.dp))
                             }
                         }
                     }
@@ -254,8 +208,7 @@ private fun FoundCard(phase: IdentifyPhase.Found, onSearch: (String) -> Unit) {
         }
         Spacer(Modifier.height(16.dp))
         Button(onClick = { onSearch("${song.title} ${song.artist}".trim()) }) {
-            Icon(Icons.Rounded.GraphicEq, contentDescription = null)
-            Text("去搜索这首歌", modifier = Modifier.padding(start = 8.dp))
+            Text("用这个歌名去在线搜索")
         }
     }
 }
@@ -315,87 +268,89 @@ private fun IdentifyVisualizer(
     val ringProgress = ring.value
     val ringProgressB = ringB.value
     val ringProgressC = ringC.value
-    Box(
-        modifier = modifier.graphicsLayer {
-            scaleX = breathe
-            scaleY = breathe
-        },
-        contentAlignment = Alignment.Center
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        androidx.compose.foundation.Canvas(modifier = Modifier.size(340.dp)) {
-            val center = this.center
-            fun pulse(amount: Float, color: Color) {
-                drawCircle(
-                    color = color.copy(alpha = (1f - amount) * if (busy) 0.9f else 0.45f),
-                    radius = size.minDimension * (0.18f + 0.36f * amount) / 2f,
-                    center = center,
-                    style = Stroke(width = 5.dp.toPx())
+        Box(contentAlignment = Alignment.Center) {
+            androidx.compose.foundation.Canvas(
+                modifier = Modifier
+                    .size(280.dp)
+                    .graphicsLayer {
+                        scaleX = breathe
+                        scaleY = breathe
+                    }
+            ) {
+                val center = this.center
+                val hole = 96.dp.toPx()
+                fun pulse(amount: Float, color: Color) {
+                    drawCircle(
+                        color = color.copy(alpha = (1f - amount) * if (busy) 0.9f else 0.45f),
+                        radius = hole / 2f + size.minDimension * 0.34f * amount,
+                        center = center,
+                        style = Stroke(width = 5.dp.toPx())
+                    )
+                }
+                pulse(ringProgress, primary)
+                pulse(ringProgressB, tertiary)
+                pulse(ringProgressC, primary)
+                rotate(spin, center) {
+                    drawArc(
+                        brush = Brush.sweepGradient(listOf(Color.Transparent, primary, tertiary, Color.Transparent)),
+                        startAngle = 0f,
+                        sweepAngle = 300f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - hole * 0.72f, center.y - hole * 0.72f),
+                        size = Size(hole * 1.44f, hole * 1.44f),
+                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+                if (progress > 0f) {
+                    drawArc(
+                        color = tertiary,
+                        startAngle = -90f,
+                        sweepAngle = 360f * progress,
+                        useCenter = false,
+                        topLeft = Offset(18.dp.toPx(), 18.dp.toPx()),
+                        size = Size(size.width - 36.dp.toPx(), size.height - 36.dp.toPx()),
+                        style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .size(84.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Mic,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(36.dp)
                 )
             }
-            pulse(ringProgress, primary)
-            pulse(ringProgressB, tertiary)
-            pulse(ringProgressC, primary)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(primary.copy(alpha = 0.28f + level * 0.4f), Color.Transparent),
-                    center = center,
-                    radius = size.minDimension * 0.22f
-                ),
-                radius = size.minDimension * 0.2f,
-                center = center
-            )
-            rotate(spin, center) {
-                drawArc(
-                    brush = Brush.sweepGradient(listOf(Color.Transparent, primary, tertiary, Color.Transparent)),
-                    startAngle = 0f,
-                    sweepAngle = 300f,
-                    useCenter = false,
-                    topLeft = Offset(center.x - size.minDimension * 0.3f, center.y - size.minDimension * 0.3f),
-                    size = Size(size.minDimension * 0.6f, size.minDimension * 0.6f),
-                    style = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
-            if (progress > 0f) {
-                drawArc(
-                    color = tertiary,
-                    startAngle = -90f,
-                    sweepAngle = 360f * progress,
-                    useCenter = false,
-                    topLeft = Offset(center.x - size.minDimension * 0.42f, center.y - size.minDimension * 0.42f),
-                    size = Size(size.minDimension * 0.84f, size.minDimension * 0.84f),
-                    style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
+        }
+        Spacer(Modifier.height(28.dp))
+        androidx.compose.foundation.Canvas(modifier = Modifier.size(width = 220.dp, height = 72.dp)) {
             val count = barValues.size
-            val gap = 7.dp.toPx()
-            val barWidth = 9.dp.toPx()
+            val gap = 8.dp.toPx()
+            val barWidth = 8.dp.toPx()
             val total = count * barWidth + (count - 1) * gap
-            var left = center.x - total / 2f
+            var left = (size.width - total) / 2f
             barValues.forEach { value ->
-                val amount = (value * 0.62f + level * 0.7f).coerceIn(0.16f, 1.25f)
-                val height = size.minDimension * 0.24f * amount
+                val amount = (value * 0.62f + level * 0.7f).coerceIn(0.18f, 1f)
+                val barHeight = size.height * amount
                 drawRoundRect(
-                    color = if (busy) primary else primary.copy(alpha = 0.55f),
-                    topLeft = Offset(left, center.y - height / 2f),
-                    size = Size(barWidth, height),
+                    color = if (busy) primary else primary.copy(alpha = 0.45f),
+                    topLeft = Offset(left, size.height - barHeight),
+                    size = Size(barWidth, barHeight),
                     cornerRadius = CornerRadius(barWidth, barWidth)
                 )
                 left += barWidth + gap
             }
-        }
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.GraphicEq,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
         }
     }
 }
