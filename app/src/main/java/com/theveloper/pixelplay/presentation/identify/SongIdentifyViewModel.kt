@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.theveloper.pixelplay.data.identify.IdentifyHistoryStore
 import com.theveloper.pixelplay.data.identify.IdentifySource
 import com.theveloper.pixelplay.data.identify.PcmClip
 import com.theveloper.pixelplay.data.identify.PlaybackCaptureService
@@ -38,10 +39,12 @@ sealed interface IdentifyPhase {
 class SongIdentifyViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val api: SongIdentifyApi,
-    private val bus: SongIdentifyBus
+    private val bus: SongIdentifyBus,
+    private val historyStore: IdentifyHistoryStore
 ) : ViewModel() {
     private val _phase = MutableStateFlow<IdentifyPhase>(IdentifyPhase.Ready)
     val phase: StateFlow<IdentifyPhase> = _phase.asStateFlow()
+    val history = historyStore.records
     val level = bus.level
 
     private var job: Job? = null
@@ -111,10 +114,11 @@ class SongIdentifyViewModel @Inject constructor(
     private suspend fun match(file: File) {
         _phase.value = IdentifyPhase.Matching
         val song = api.recognize(file)
-        _phase.value = if (song == null) {
-            IdentifyPhase.Failed("没有认出这首歌，靠近一点或换屏幕声音再试")
+        if (song == null) {
+            _phase.value = IdentifyPhase.Failed("没有认出这首歌，靠近一点或换屏幕声音再试")
         } else {
-            IdentifyPhase.Found(song)
+            historyStore.add(song)
+            _phase.value = IdentifyPhase.Found(song)
         }
     }
 }
