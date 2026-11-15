@@ -78,16 +78,25 @@ internal object PcmClip {
         )
     }
 
-    fun bufferSize(): Int {
+    fun bufferSize(sampleRate: Int = SAMPLE_RATE, channels: Int = 1): Int {
+        val mask = if (channels == 2) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
         val min = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
+            sampleRate,
+            mask,
             AudioFormat.ENCODING_PCM_16BIT
         )
         return if (min > 0) min * 2 else 8192
     }
 
-    fun record(destination: File, bus: SongIdentifyBus, createRecorder: () -> AudioRecord): Boolean {
+    fun record(
+        destination: File,
+        bus: SongIdentifyBus,
+        sampleRate: Int = SAMPLE_RATE,
+        channels: Int = 1,
+        silentMessage: String = "没有录到声音",
+        rejectSilence: Boolean = false,
+        createRecorder: () -> AudioRecord
+    ): Boolean {
         synchronized(lock) {
         val token = bus.generation.get()
         val recorder = createRecorder()
@@ -95,16 +104,22 @@ internal object PcmClip {
             recorder.release()
             throw IllegalStateException("录音设备没有准备好")
         }
-        val buffer = ByteArray(bufferSize())
+        val buffer = ByteArray(bufferSize(sampleRate, channels))
         val pcm = java.io.ByteArrayOutputStream()
+        var energy = 0.0
+        var reads = 0
         val deadline = android.os.SystemClock.elapsedRealtime() + SECONDS * 1000L
         try {
             recorder.startRecording()
             while (bus.generation.get() == token && android.os.SystemClock.elapsedRealtime() < deadline) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
-                    pcm.write(buffer, 0, read)
-                    bus.level.value = levelOf(buffer, read)
+                    val mono = if (channels == 1) buffer.copyOf(read) else downmix(buffer, read)
+                    pcm.write(mono)
+                    val level = levelOf(mono, mono.size)
+                    energy += level
+                    reads++
+                    bus.level.value = level
                 }
             }
         } finally {
@@ -114,10 +129,34 @@ internal object PcmClip {
         }
         if (bus.generation.get() != token) return false
         val bytes = pcm.toByteArray()
-        if (bytes.size < SAMPLE_RATE) throw IllegalStateException("没有录到声音")
-        writeWav(destination, bytes, SAMPLE_RATE)
+        if (bytes.size < sampleRate || (rejectSilence && (reads == 0 || energy / reads < 0.01))) {
+            throw IllegalStateException(silentMessage)
+        }
+        writeWav(destination, bytes, sampleRate)
         return true
         }
+    }
+
+    private fun downmix(buffer: ByteArray, length: Int): ByteArray {
+        val frames = length / 4
+        val mono = ByteArray(frames * 2)
+        var input = 0
+        var output = 0
+        repeat(frames) {
+            val left = sampleAt(buffer, input)
+            val right = sampleAt(buffer, input + 2)
+            val mixed = ((left + right) / 2).toInt().toShort()
+            mono[output] = (mixed.toInt() and 0xff).toByte()
+            mono[output + 1] = ((mixed.toInt() shr 8) and 0xff).toByte()
+            input += 4
+            output += 2
+        }
+        return mono
+    }
+
+    private fun sampleAt(buffer: ByteArray, index: Int): Int {
+        val sample = (buffer[index].toInt() and 0xff) or (buffer[index + 1].toInt() shl 8)
+        return sample.toShort().toInt()
     }
 
     private fun levelOf(buffer: ByteArray, length: Int): Float {

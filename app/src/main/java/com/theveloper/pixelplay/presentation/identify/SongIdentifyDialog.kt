@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.Button
@@ -65,7 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -143,8 +144,13 @@ fun SongIdentifyDialog(
         }
     }
 
+    val dismiss = {
+        viewModel.stop()
+        onDismiss()
+    }
+    val listening = phase is IdentifyPhase.Listening || phase is IdentifyPhase.Matching
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -171,7 +177,7 @@ fun SongIdentifyDialog(
                             Icon(Icons.Rounded.History, contentDescription = "历史记录")
                         }
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = dismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = "关闭")
                     }
                 }
@@ -197,14 +203,22 @@ fun SongIdentifyDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     IdentifyVisualizer(
-                        busy = phase is IdentifyPhase.Listening || phase is IdentifyPhase.Matching || phase is IdentifyPhase.Found,
+                        busy = listening || phase is IdentifyPhase.Found,
                         level = level,
                         progress = heard,
+                        centerIcon = if (listening) Icons.Rounded.Close else Icons.Rounded.GraphicEq,
+                        centerDescription = if (listening) "停止" else "识别设备音乐",
+                        onCenter = {
+                            if (listening) viewModel.stop() else begin(IdentifySource.Playback)
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
                 AnimatedContent(targetState = phase, label = "identify_status") { current ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
                             text = when (current) {
                                 IdentifyPhase.Ready -> "选一种方式开始听"
@@ -230,13 +244,24 @@ fun SongIdentifyDialog(
                             FoundCard(phase = current, onSearch = onSearch)
                         }
                         if (current !is IdentifyPhase.Listening && current !is IdentifyPhase.Matching && current !is IdentifyPhase.Found) {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Button(onClick = { begin(IdentifySource.Microphone) }) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Button(
+                                    onClick = { begin(IdentifySource.Microphone) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
                                     Icon(Icons.Rounded.Mic, contentDescription = null)
                                     Text("麦克风", modifier = Modifier.padding(start = 8.dp))
                                 }
-                                FilledTonalButton(onClick = { begin(IdentifySource.Playback) }) {
-                                    Text("设备播放")
+                                FilledTonalButton(
+                                    onClick = { begin(IdentifySource.Playback) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Rounded.GraphicEq, contentDescription = null)
+                                    Text("识别设备音乐", modifier = Modifier.padding(start = 8.dp))
                                 }
                             }
                         }
@@ -373,6 +398,9 @@ private fun IdentifyVisualizer(
     busy: Boolean,
     level: Float,
     progress: Float,
+    centerIcon: ImageVector,
+    centerDescription: String,
+    onCenter: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val transition = rememberInfiniteTransition(label = "identify_motion")
@@ -472,12 +500,13 @@ private fun IdentifyVisualizer(
                 modifier = Modifier
                     .size(84.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .clickable(onClick = onCenter),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.Mic,
-                    contentDescription = null,
+                    imageVector = centerIcon,
+                    contentDescription = centerDescription,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(36.dp)
                 )
