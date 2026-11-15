@@ -19,7 +19,8 @@ import javax.inject.Singleton
 @Singleton
 class GdStudioRepository @Inject constructor(
     okHttpClient: OkHttpClient,
-    private val webGate: GdStudioWebGate
+    private val webGate: GdStudioWebGate,
+    private val page: GdStudioPage
 ) {
     private val client = okHttpClient.newBuilder()
         .addInterceptor { chain ->
@@ -133,10 +134,30 @@ class GdStudioRepository @Inject constructor(
     }
 
     private suspend fun get(query: Map<String, String>, essential: Boolean): String {
+        try {
+            return getFromApi(query, essential)
+        } catch (error: HumanCheckException) {
+            webGate.awaitClearance()
+            try {
+                return getFromApi(query, essential)
+            } catch (again: Exception) {
+                if (again is kotlinx.coroutines.CancellationException) throw again
+            }
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+        }
+        return try {
+            page.query(query)
+        } catch (_: HumanCheckException) {
+            webGate.awaitClearance()
+            page.query(query)
+        }
+    }
+
+    private suspend fun getFromApi(query: Map<String, String>, essential: Boolean): String {
         var last: Exception? = null
         var sawChallenge = false
-        val bases = orderedEndpoints()
-        for (base in bases) {
+        for (base in orderedEndpoints()) {
             if (!awaitSlot(essential)) {
                 throw GdStudioException("请求太频繁，请稍后再试")
             }
@@ -152,19 +173,7 @@ class GdStudioRepository @Inject constructor(
                 if (workingBase == base) workingBase = null
             }
         }
-        if (sawChallenge) {
-            webGate.awaitClearance()
-            for (base in orderedEndpoints()) {
-                if (!awaitSlot(essential)) continue
-                try {
-                    val body = fetch(base, query)
-                    workingBase = base
-                    return body
-                } catch (error: Exception) {
-                    last = error
-                }
-            }
-        }
+        if (sawChallenge) throw HumanCheckException(GdStudioApi.SITE)
         throw last ?: GdStudioException("GD音乐台请求失败")
     }
 
