@@ -20,6 +20,7 @@ import com.theveloper.pixelplay.data.database.toSong
 import com.theveloper.pixelplay.data.model.ArtistRef
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.utils.SidecarMedia
 import kotlinx.coroutines.flow.first
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -306,6 +307,56 @@ class GdStudioLibrary @Inject constructor(
         val raw = listOf(song.title, song.artist).filter { it.isNotBlank() }.joinToString(" - ")
         val safe = raw.replace(Regex("""[\\/:*?"<>|]"""), " ").trim().take(80).ifBlank { song.id }
         return "$safe.$extension"
+    }
+
+    suspend fun applySidecar(song: Song): String = withContext(Dispatchers.IO) {
+        val audioPath = song.path
+        if (audioPath.isBlank()) return@withContext "这首歌还没有本地文件"
+        val songId = song.id.toLongOrNull() ?: return@withContext "这首歌还没有本地文件"
+        val coverBytes = SidecarMedia.coverBytes(context, audioPath, songId)
+        val lyrics = SidecarMedia.lyricsText(context, audioPath, songId)
+        if (coverBytes == null && lyrics.isNullOrBlank()) {
+            return@withContext "同目录没有封面或歌词。封面用歌曲同名的 jpg，歌词用同名的 lrc"
+        }
+        val (fileTitle, fileArtist) = namesFromFile(File(audioPath).name)
+        val title = song.title.takeUnless { blankMeta(it) } ?: fileTitle
+        val artist = song.artist.takeUnless { blankMeta(it) } ?: fileArtist
+        val album = song.album.takeUnless { blankMeta(it) }.orEmpty()
+        val coverFile = coverBytes?.let { bytes ->
+            File(File(context.cacheDir, "gdstudio").apply { mkdirs() }, "sidecar-$songId.jpg").also { it.writeBytes(bytes) }
+        }
+        val durableCover = keepCover(songId, coverFile)
+        val uri = song.contentUriString.takeIf { it.startsWith("content:") }?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?.takeIf { canRead(it) }
+        if (uri != null) {
+            writeTags(uri, title, artist, album, lyrics, durableCover ?: coverFile, force = true)
+            writeColumns(uri, title, artist, album)
+        } else {
+            writeTags(File(audioPath), title, artist, album, lyrics, durableCover ?: coverFile, force = true)
+        }
+        val artUri = durableCover?.let { Uri.fromFile(it).toString() }
+        val rows = listOfNotNull(
+            musicDao.getSongByIdOnce(songId),
+            musicDao.getSongByPath(audioPath)
+        ).distinctBy { it.id }
+        rows.forEach { row ->
+            musicDao.insertSongs(
+                listOf(
+                    row.copy(
+                        title = title.ifBlank { row.title },
+                        artistName = artist.ifBlank { row.artistName },
+                        albumName = album.ifBlank { row.albumName },
+                        lyrics = lyrics ?: row.lyrics,
+                        albumArtUriString = artUri ?: row.albumArtUriString
+                    )
+                )
+            )
+        }
+        when {
+            coverBytes != null && !lyrics.isNullOrBlank() -> "已写入同目录的封面和歌词"
+            coverBytes != null -> "已写入同目录的封面，没有找到歌词"
+            else -> "已写入同目录的歌词，没有找到封面"
+        }
     }
 
     suspend fun repairPublishedSongs() {

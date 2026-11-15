@@ -184,11 +184,13 @@ object AlbumArtUtils {
         }
 
         val resolvedPath = filePath ?: resolveSongMediaStoreInfo(appContext, songId)?.path ?: return null
-        if (!File(resolvedPath).exists()) {
-            return null
+        if (File(resolvedPath).exists()) {
+            extractEmbeddedAlbumArtBytes(resolvedPath)?.let { bytes ->
+                cacheAlbumArtBytes(appContext, bytes, songId)
+                return cachedFile.takeIf { it.exists() && it.length() > 0 }
+            }
         }
-
-        extractEmbeddedAlbumArtBytes(resolvedPath)?.let { bytes ->
+        SidecarMedia.coverBytes(appContext, resolvedPath, songId)?.let { bytes ->
             cacheAlbumArtBytes(appContext, bytes, songId)
             return cachedFile.takeIf { it.exists() && it.length() > 0 }
         }
@@ -226,7 +228,7 @@ object AlbumArtUtils {
     ): Boolean {
         val audioFile = File(filePath)
         if (!audioFile.exists() || !audioFile.canRead()) {
-            return false
+            return SidecarMedia.coverBytes(appContext, filePath, songId) != null
         }
 
         val cachedFile = getCachedAlbumArtFile(appContext, songId)
@@ -234,10 +236,14 @@ object AlbumArtUtils {
 
         if (!deepScan) {
             if (noArtFile.exists()) {
-                if (cachedFile.exists()) {
-                    cachedFile.delete()
+                if (SidecarMedia.coverBytes(appContext, filePath, songId) != null) {
+                    noArtFile.delete()
+                } else {
+                    if (cachedFile.exists()) {
+                        cachedFile.delete()
+                    }
+                    return false
                 }
-                return false
             }
 
             if (cachedFile.exists() && cachedFile.length() > 0) {
@@ -248,7 +254,7 @@ object AlbumArtUtils {
         }
 
         val hasEmbeddedArt = extractEmbeddedAlbumArtBytes(filePath)?.isNotEmpty() == true
-        if (hasEmbeddedArt) {
+        if (hasEmbeddedArt || SidecarMedia.coverBytes(appContext, filePath, songId) != null) {
             noArtFile.delete()
             return true
         }

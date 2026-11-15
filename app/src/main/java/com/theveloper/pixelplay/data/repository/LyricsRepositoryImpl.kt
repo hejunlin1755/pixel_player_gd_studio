@@ -24,6 +24,7 @@ import com.theveloper.pixelplay.utils.LyricsImportSecurity
 import com.theveloper.pixelplay.utils.LyricsImportValidationResult
 import com.theveloper.pixelplay.utils.LogUtils
 import com.theveloper.pixelplay.utils.LyricsUtils
+import com.theveloper.pixelplay.utils.SidecarMedia
 import com.theveloper.pixelplay.utils.MultiLangRomanizer
 import com.theveloper.pixelplay.utils.NetworkRetryUtils
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -1038,6 +1039,11 @@ class LyricsRepositoryImpl @Inject constructor(
                         return@withContext validated.parsedLyrics
                     }
                 }
+            }
+            val sidecar = SidecarMedia.lyricsText(context, song.path, song.id.toLongOrNull() ?: return@withContext null)
+            if (!sidecar.isNullOrBlank()) {
+                val parsed = LyricsUtils.parseLyrics(sidecar)
+                if (parsed.isValid()) return@withContext parsed
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error searching for local lyrics file", e)
