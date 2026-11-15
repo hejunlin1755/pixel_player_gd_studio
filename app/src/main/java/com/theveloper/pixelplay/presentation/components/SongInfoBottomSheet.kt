@@ -538,22 +538,6 @@ fun SongInfoBottomSheet(
                                             onAddNextToQueue = onAddNextToQueue
                                         )
 
-                                        val fillingSidecar by songInfoViewModel.fillingSidecar.collectAsStateWithLifecycle()
-                                        FilledTonalButton(
-                                            onClick = {
-                                                songInfoViewModel.fillFromSidecar(song) { message ->
-                                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                                }
-                                            },
-                                            enabled = !fillingSidecar,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(min = 66.dp),
-                                            shape = CircleShape
-                                        ) {
-                                            Text(if (fillingSidecar) "正在读取同目录的封面和歌词" else "补全封面和歌词")
-                                        }
-
                                         Row3Actions(
                                             onAddToPlaylist = onAddToPlayList,
                                             onDelete = {

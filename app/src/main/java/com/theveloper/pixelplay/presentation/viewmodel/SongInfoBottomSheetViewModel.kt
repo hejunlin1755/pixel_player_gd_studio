@@ -14,7 +14,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.database.MusicDao
-import com.theveloper.pixelplay.data.gdstudio.GdStudioLibrary
 import com.theveloper.pixelplay.data.database.toArtist
 import com.theveloper.pixelplay.data.model.Artist
 import com.theveloper.pixelplay.data.model.Song
@@ -48,7 +47,6 @@ class SongInfoBottomSheetViewModel @Inject constructor(
     private val wearPhoneTransferSender: WearPhoneTransferSender,
     private val transferStateStore: PhoneWatchTransferStateStore,
     private val musicDao: MusicDao,
-    private val gdStudioLibrary: GdStudioLibrary,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -109,21 +107,6 @@ class SongInfoBottomSheetViewModel @Inject constructor(
     )
 
     val audioMeta: StateFlow<AudioMeta?> = _audioMeta.asStateFlow()
-
-    private val _fillingSidecar = MutableStateFlow(false)
-    val fillingSidecar: StateFlow<Boolean> = _fillingSidecar.asStateFlow()
-
-    fun fillFromSidecar(song: Song, onResult: (String) -> Unit) {
-        if (_fillingSidecar.value) return
-        viewModelScope.launch {
-            _fillingSidecar.value = true
-            val message = withContext(Dispatchers.IO) {
-                runCatching { gdStudioLibrary.applySidecar(song) }.getOrElse { it.message ?: "补全失败" }
-            }
-            _fillingSidecar.value = false
-            onResult(message)
-        }
-    }
 
     fun loadArtistsForSong(song: Song) {
         val refs = song.artists

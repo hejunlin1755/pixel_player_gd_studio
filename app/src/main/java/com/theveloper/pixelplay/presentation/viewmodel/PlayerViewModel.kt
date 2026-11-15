@@ -2277,8 +2277,8 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             _toastEvents.emit("正在下载")
             try {
-                gdStudioLibrary.ensureLocal(gdStudioLibrary.withQuality(song, quality))
-                _toastEvents.emit("已下载到本地")
+                val message = gdStudioLibrary.downloadToMusic(gdStudioLibrary.withQuality(song, quality))
+                _toastEvents.emit(message)
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
