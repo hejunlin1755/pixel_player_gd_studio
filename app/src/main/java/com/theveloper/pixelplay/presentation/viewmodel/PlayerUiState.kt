@@ -29,6 +29,7 @@ data class PlayerUiState(
     // val artists: ImmutableList<Artist> = persistentListOf(), // REMOVED
     val searchResults: ImmutableList<SearchResultItem> = persistentListOf(),
     val searchStatus: SearchStatus = SearchStatus.Idle,
+    val onlineSearchFailure: String? = null,
     val musicFolders: ImmutableList<MusicFolder> = persistentListOf(),
     val sortOption: SortOption = SortOption.SongDefaultOrder,
     val isLoadingInitialSongs: Boolean = true,

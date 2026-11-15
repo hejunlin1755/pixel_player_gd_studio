@@ -69,6 +69,8 @@ class SearchStateHolder @Inject constructor(
 
     private val _searchStatus = MutableStateFlow(SearchStatus.Idle)
     val searchStatus = _searchStatus.asStateFlow()
+    private val _onlineFailure = MutableStateFlow<String?>(null)
+    val onlineFailure = _onlineFailure.asStateFlow()
 
     private val _selectedSearchFilter = MutableStateFlow(SearchFilterType.ALL)
     val selectedSearchFilter = _selectedSearchFilter.asStateFlow()
@@ -166,7 +168,7 @@ class SearchStateHolder @Inject constructor(
                             } catch (error: TimeoutCancellationException) {
                                 if (request.requestId == latestSearchRequestId.get()) {
                                     Timber.e(error, "Online search timed out for query: $normalizedQuery")
-                                    _searchStatus.value = SearchStatus.Failed
+                                    markOnlineFailed("在线搜索超时")
                                 }
                                 return@coroutineScope
                             } catch (error: CancellationException) {
@@ -174,7 +176,7 @@ class SearchStateHolder @Inject constructor(
                             } catch (error: Exception) {
                                 if (request.requestId == latestSearchRequestId.get()) {
                                     Timber.e(error, "Online search failed for query: $normalizedQuery")
-                                    _searchStatus.value = SearchStatus.Failed
+                                    markOnlineFailed(error.message)
                                 }
                                 return@coroutineScope
                             }
@@ -182,6 +184,7 @@ class SearchStateHolder @Inject constructor(
                             rememberedOnlineSongs = online
                             rememberedOnlineQuery = normalizedQuery
                             _searchResults.value = mergeOnlineSongs(local, online)
+                            _onlineFailure.value = null
                             _searchStatus.value = SearchStatus.Ready
                         }
                     } catch (_: CancellationException) {
@@ -189,11 +192,17 @@ class SearchStateHolder @Inject constructor(
                     } catch (e: Exception) {
                         if (request.requestId == latestSearchRequestId.get()) {
                             Timber.e(e, "Error performing search for query: $normalizedQuery")
-                            _searchStatus.value = SearchStatus.Failed
+                            markOnlineFailed(e.message)
                         }
                     }
                 }
         }
+    }
+
+    private fun markOnlineFailed(reason: String?) {
+        val text = reason?.trim()?.takeIf { it.isNotEmpty() } ?: "在线搜索失败"
+        _onlineFailure.value = text
+        _searchStatus.value = SearchStatus.Failed
     }
 
     private fun keptOnlineSongs(query: String, filter: SearchFilterType): List<Song> {
@@ -267,6 +276,7 @@ class SearchStateHolder @Inject constructor(
             }
             _searchStatus.value = SearchStatus.Idle
         } else if (fetchOnline) {
+            _onlineFailure.value = null
             _searchStatus.value = SearchStatus.Searching
         }
 

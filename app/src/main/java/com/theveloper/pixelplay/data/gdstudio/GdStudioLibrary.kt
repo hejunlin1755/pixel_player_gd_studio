@@ -63,7 +63,11 @@ class GdStudioLibrary @Inject constructor(
             }.awaitAll()
         }
         if (outcomes.all { it.isFailure }) {
-            throw outcomes.firstNotNullOf { it.exceptionOrNull() }
+            val reason = outcomes.mapNotNull { it.exceptionOrNull()?.message?.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString("；")
+            throw GdStudioException(reason.ifBlank { "在线搜索失败" })
         }
         val tracks = outcomes.mapNotNull { it.getOrNull() }.flatten()
         val quality = userPreferences.gdCacheQualityFlow.first()

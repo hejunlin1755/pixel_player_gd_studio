@@ -158,7 +158,8 @@ private const val MAX_ALBUM_MULTI_SELECTION = 6
 private data class SearchUiSlice(
     val selectedSearchFilter: SearchFilterType = SearchFilterType.ALL,
     val searchResults: ImmutableList<SearchResultItem> = persistentListOf(),
-    val searchStatus: SearchStatus = SearchStatus.Idle
+    val searchStatus: SearchStatus = SearchStatus.Idle,
+    val onlineSearchFailure: String? = null
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -235,7 +236,8 @@ fun SearchScreen(
                 SearchUiSlice(
                     selectedSearchFilter = uiState.selectedSearchFilter,
                     searchResults = uiState.searchResults,
-                    searchStatus = uiState.searchStatus
+                    searchStatus = uiState.searchStatus,
+                    onlineSearchFailure = uiState.onlineSearchFailure
                 )
             }
             .distinctUntilChanged()
@@ -549,7 +551,8 @@ fun SearchScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             SearchStatus.Failed -> Text(
-                                text = "在线搜索失败，本地结果仍可用",
+                                text = searchUiState.onlineSearchFailure?.let { "在线搜索失败：$it" }
+                                    ?: "在线搜索失败，本地结果仍可用",
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error
@@ -633,7 +636,8 @@ fun SearchScreen(
                                     EmptySearchResults(
                                         searchQuery = searchQuery,
                                         colorScheme = colorScheme,
-                                        searchStatus = searchUiState.searchStatus
+                                        searchStatus = searchUiState.searchStatus,
+                                        failureMessage = searchUiState.onlineSearchFailure
                                     )
                                 } else {
                                     SearchResultsList(
@@ -1094,7 +1098,8 @@ fun SearchHistoryListItem(
 fun EmptySearchResults(
     searchQuery: String,
     colorScheme: ColorScheme,
-    searchStatus: SearchStatus = SearchStatus.Idle
+    searchStatus: SearchStatus = SearchStatus.Idle,
+    failureMessage: String? = null
 ) {
     Column(
         modifier = Modifier
@@ -1118,7 +1123,7 @@ fun EmptySearchResults(
         Text(
             text = when {
                 searchStatus == SearchStatus.Searching -> "正在搜索"
-                searchStatus == SearchStatus.Failed -> "搜索失败"
+                searchStatus == SearchStatus.Failed -> failureMessage?.let { "搜索失败：$it" } ?: "搜索失败"
                 searchQuery.isNotBlank() -> stringResource(R.string.search_no_results_for_query, searchQuery)
                 else -> stringResource(R.string.search_nothing_found)
             },
@@ -1132,7 +1137,7 @@ fun EmptySearchResults(
         Text(
             text = when (searchStatus) {
                 SearchStatus.Searching -> "正在查询 GD音乐台，请稍等"
-                SearchStatus.Failed -> "在线结果没有拿到，再点一次右边的搜索"
+                SearchStatus.Failed -> failureMessage ?: "在线结果没有拿到，再点一次右边的搜索"
                 else -> stringResource(R.string.search_try_different_or_filters)
             },
             style = MaterialTheme.typography.bodyLarge,

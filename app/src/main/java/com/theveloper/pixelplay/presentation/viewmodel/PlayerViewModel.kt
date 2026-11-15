@@ -1787,13 +1787,15 @@ class PlayerViewModel @Inject constructor(
                 searchStateHolder.selectedSearchFilter,
                 searchStateHolder.searchHistory,
                 searchStateHolder.searchStatus,
-            ) { results, filter, history, status ->
+                searchStateHolder.onlineFailure,
+            ) { results, filter, history, status, failure ->
                 _playerUiState.update {
                     it.copy(
                         searchResults = results,
                         selectedSearchFilter = filter,
                         searchHistory = history,
                         searchStatus = status,
+                        onlineSearchFailure = failure,
                     )
                 }
             }.collect { }
