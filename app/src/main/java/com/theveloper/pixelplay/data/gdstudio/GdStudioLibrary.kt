@@ -12,6 +12,8 @@ import com.theveloper.pixelplay.data.database.SourceType
 import com.theveloper.pixelplay.data.database.toSong
 import com.theveloper.pixelplay.data.model.ArtistRef
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import kotlinx.coroutines.flow.first
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -34,6 +36,7 @@ import javax.inject.Singleton
 class GdStudioLibrary @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: GdStudioRepository,
+    private val userPreferences: UserPreferencesRepository,
     private val musicDao: MusicDao,
     okHttpClient: OkHttpClient
 ) {
@@ -57,11 +60,12 @@ class GdStudioLibrary @Inject constructor(
             throw outcomes.firstNotNullOf { it.exceptionOrNull() }
         }
         val tracks = outcomes.mapNotNull { it.getOrNull() }.flatten()
+        val quality = userPreferences.gdCacheQualityFlow.first()
         val songs = mutableListOf<Song>()
         for (track in tracks.distinctBy { "${it.source}:${it.id}" }) {
             val songId = stableId("song:${track.source}:${track.id}")
             val saved = musicDao.getSongByIdOnce(songId)?.toSong()
-            songs += saved ?: remoteSong(track, songId)
+            songs += saved ?: remoteSong(track, songId, quality)
         }
         return attachCovers(songs)
     }
@@ -133,15 +137,19 @@ class GdStudioLibrary @Inject constructor(
     }
 
     suspend fun ensureCached(song: Song): Song = withContext(Dispatchers.IO) {
-        val playable = asPlayable(song)
+        val quality = userPreferences.gdCacheQualityFlow.first()
+        val playable = withQuality(asPlayable(song), quality)
         val songId = playable.id.toLong()
         musicDao.getSongByIdOnce(songId)?.let { existing ->
             if (isLibraryFile(existing.filePath)) return@withContext existing.toSong()
-            if (isCacheFile(existing.filePath) && File(existing.filePath).let { it.isFile && it.length() > 0L }) {
+            if (isCacheFile(existing.filePath) &&
+                cachedAtQuality(existing.filePath, songId, quality) &&
+                File(existing.filePath).let { it.isFile && it.length() > 0L }
+            ) {
                 return@withContext existing.toSong().copy(contentUriString = playable.contentUriString)
             }
         }
-        val ready = playable.path.takeIf { isCacheFile(it) }?.let(::File)
+        val ready = playable.path.takeIf { isCacheFile(it) && cachedAtQuality(it, songId, quality) }?.let(::File)
         if (ready != null && ready.isFile && ready.length() > 0L) {
             return@withContext playable
         }
@@ -353,7 +361,11 @@ class GdStudioLibrary @Inject constructor(
         return path.contains("${File.separator}cache${File.separator}") && path.contains("${File.separator}gdstudio${File.separator}")
     }
 
-    private fun remoteSong(track: Track, songId: Long): Song {
+    private fun cachedAtQuality(path: String, songId: Long, br: String): Boolean {
+        return File(path).name.startsWith("$songId-$br")
+    }
+
+    private fun remoteSong(track: Track, songId: Long, quality: String): Song {
         val artistName = track.artists.joinToString(", ").ifBlank { "未知歌手" }
         val albumName = track.album.ifBlank { "未知专辑" }
         val artistId = stableId("artist:$artistName")
@@ -367,7 +379,7 @@ class GdStudioLibrary @Inject constructor(
             album = albumName,
             albumId = albumId,
             path = "",
-            contentUriString = GdStudioApi.trackUri(track.source, track.id, track.lyricId, "320") +
+            contentUriString = GdStudioApi.trackUri(track.source, track.id, track.lyricId, quality) +
                 "&pic=${Uri.encode(track.picId)}",
             albumArtUriString = null,
             duration = 0L,

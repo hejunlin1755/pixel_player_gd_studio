@@ -40,7 +40,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -425,6 +427,29 @@ fun SearchScreen(
                             contentDescription = "搜索"
                         )
                     }
+                }
+            }
+
+            val cacheQuality by playerViewModel.gdCacheQuality.collectAsStateWithLifecycle()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(start = 24.dp, top = 8.dp, end = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "缓存音质",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                listOf("128", "192", "320", "740", "999").forEach { quality ->
+                    FilterChip(
+                        selected = cacheQuality == quality,
+                        onClick = { playerViewModel.setGdCacheQuality(quality) },
+                        label = { Text(quality) }
+                    )
                 }
             }
 

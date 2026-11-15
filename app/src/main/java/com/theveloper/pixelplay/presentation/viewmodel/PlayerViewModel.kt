@@ -476,6 +476,13 @@ class PlayerViewModel @Inject constructor(
             initialValue = NavBarStyle.DEFAULT
         )
 
+    val gdCacheQuality: StateFlow<String> = userPreferencesRepository.gdCacheQualityFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "320")
+
+    fun setGdCacheQuality(quality: String) {
+        viewModelScope.launch { userPreferencesRepository.setGdCacheQuality(quality) }
+    }
+
     val navBarCompactMode: StateFlow<Boolean> = userPreferencesRepository.navBarCompactModeFlow
         .stateIn(
             scope = viewModelScope,

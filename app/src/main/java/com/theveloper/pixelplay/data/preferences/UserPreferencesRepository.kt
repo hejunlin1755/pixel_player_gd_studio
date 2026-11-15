@@ -210,6 +210,7 @@ class UserPreferencesRepository @Inject constructor(
 
         // Developer options
         val ALBUM_ART_QUALITY = stringPreferencesKey("album_art_quality")
+        val GD_CACHE_QUALITY = stringPreferencesKey("gd_cache_quality")
         val ALBUM_ART_CACHE_LIMIT_MB = intPreferencesKey("album_art_cache_limit_mb")
         val TAP_BACKGROUND_CLOSES_PLAYER = booleanPreferencesKey("tap_background_closes_player")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
@@ -1204,6 +1205,17 @@ suspend fun markDirectoryRulesVersionApplied(version: Int) {
         dataStore.edit { it[PreferencesKeys.ALBUM_ART_QUALITY] = quality.name }
     }
 
+    val gdCacheQualityFlow: Flow<String> =
+        pref { preferences ->
+            val value = preferences[PreferencesKeys.GD_CACHE_QUALITY]
+            if (value != null && value in GD_CACHE_QUALITIES) value else "320"
+        }
+
+    suspend fun setGdCacheQuality(quality: String) {
+        if (quality !in GD_CACHE_QUALITIES) return
+        dataStore.edit { it[PreferencesKeys.GD_CACHE_QUALITY] = quality }
+    }
+
     val albumArtCacheLimitMbFlow: Flow<Int> =
         pref { it[PreferencesKeys.ALBUM_ART_CACHE_LIMIT_MB] ?: DEFAULT_ALBUM_ART_CACHE_LIMIT_MB }
 
@@ -1356,6 +1368,7 @@ suspend fun markDirectoryRulesVersionApplied(version: Int) {
         )
 
         const val DEFAULT_ALBUM_ART_CACHE_LIMIT_MB = 200
+        val GD_CACHE_QUALITIES = setOf("128", "192", "320", "740", "999")
     }
 
     // ─── Private utilities ────────────────────────────────────────────────────
