@@ -44,6 +44,7 @@ class GdStudioRepository @Inject constructor(
     private val requestTimes = ArrayDeque<Long>()
     private val coverCache = ConcurrentHashMap<String, String>()
     private val streamCache = ConcurrentHashMap<String, CachedStream>()
+    @Volatile private var workingBase: String? = null
 
     suspend fun search(
         source: String,
@@ -66,7 +67,8 @@ class GdStudioRepository @Inject constructor(
                 "name" to name,
                 "count" to count.coerceIn(1, 50).toString(),
                 "pages" to page.coerceAtLeast(1).toString()
-            )
+            ),
+            essential = false
         )
         GdStudioApi.parseSearch(body)
     }
@@ -87,7 +89,8 @@ class GdStudioRepository @Inject constructor(
                     "source" to stable,
                     "id" to trackId,
                     "br" to br
-                )
+                ),
+                essential = true
             )
             val url = GdStudioApi.parseUrl(body)?.url
             if (!url.isNullOrBlank()) {
@@ -109,7 +112,8 @@ class GdStudioRepository @Inject constructor(
                 "source" to stable,
                 "id" to picId,
                 "size" to if (size == "500") "500" else "300"
-            )
+            ),
+            essential = false
         )
         GdStudioApi.parsePic(body)?.also { coverCache[cacheKey] = it }
     }
@@ -122,36 +126,55 @@ class GdStudioRepository @Inject constructor(
                 "types" to "lyric",
                 "source" to stable,
                 "id" to lyricId
-            )
+            ),
+            essential = true
         )
         GdStudioApi.parseLyrics(body)
     }
 
-    private suspend fun get(query: Map<String, String>): String {
+    private suspend fun get(query: Map<String, String>, essential: Boolean): String {
         var last: Exception? = null
         var sawChallenge = false
-        for (base in GdStudioApi.endpoints) {
-            awaitSlot()
+        val bases = orderedEndpoints()
+        for (base in bases) {
+            if (!awaitSlot(essential)) {
+                throw GdStudioException("请求太频繁，请稍后再试")
+            }
             try {
-                return fetch(base, query)
+                val body = fetch(base, query)
+                workingBase = base
+                return body
             } catch (_: HumanCheckException) {
                 sawChallenge = true
+                break
             } catch (error: Exception) {
                 last = error
+                if (workingBase == base) workingBase = null
             }
         }
         if (sawChallenge) {
             webGate.awaitClearance()
-            for (base in GdStudioApi.endpoints) {
-                awaitSlot()
+            for (base in orderedEndpoints()) {
+                if (!awaitSlot(essential)) continue
                 try {
-                    return fetch(base, query)
+                    val body = fetch(base, query)
+                    workingBase = base
+                    return body
                 } catch (error: Exception) {
                     last = error
                 }
             }
         }
         throw last ?: GdStudioException("GD音乐台请求失败")
+    }
+
+    private fun orderedEndpoints(): List<String> {
+        val preferred = workingBase
+        return if (preferred == null) {
+            GdStudioApi.endpoints
+        } else {
+            listOf(preferred) + GdStudioApi.endpoints.filter { it != preferred }
+        }
     }
 
     private fun fetch(base: String, query: Map<String, String>): String {
@@ -181,27 +204,25 @@ class GdStudioRepository @Inject constructor(
             body.contains("请完成以下操作")
     }
 
-    private suspend fun awaitSlot() {
-        while (true) {
-            val waitMs = gate.withLock {
-                val now = System.currentTimeMillis()
-                while (requestTimes.isNotEmpty() && now - requestTimes.first() >= WINDOW_MS) {
+    private suspend fun awaitSlot(essential: Boolean): Boolean {
+        val waitMs = gate.withLock {
+            val now = System.currentTimeMillis()
+            while (requestTimes.isNotEmpty() && now - requestTimes.first() >= WINDOW_MS) {
+                requestTimes.removeFirst()
+            }
+            if (requestTimes.size < MAX_REQUESTS || essential) {
+                if (requestTimes.size >= MAX_REQUESTS) {
                     requestTimes.removeFirst()
                 }
-            if (requestTimes.size < MAX_REQUESTS) {
                 requestTimes.addLast(now)
                 0L
             } else {
-                val waitMs = (WINDOW_MS - (now - requestTimes.first()) + 200L).coerceAtLeast(200L)
-                if (waitMs > 1_500L) {
-                    throw GdStudioException("请求太频繁，请稍后再试")
-                }
-                waitMs
+                -1L
             }
-            }
-            if (waitMs == 0L) return
-            delay(waitMs)
         }
+        if (waitMs == 0L) return true
+        delay(300)
+        return false
     }
 
     private data class CachedStream(val url: String, val at: Long)

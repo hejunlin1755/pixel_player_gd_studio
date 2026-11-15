@@ -71,7 +71,7 @@ class GdStudioLibrary @Inject constructor(
             val pic = picIdOf(song)
             if (pic.isBlank()) null else ref.source to pic
         }.distinct()
-        val covers = needed.map { (source, pic) ->
+        val covers = needed.take(8).map { (source, pic) ->
             async {
                 (source to pic) to runCatching { repository.coverUrl(source, pic) }.getOrNull()
             }
