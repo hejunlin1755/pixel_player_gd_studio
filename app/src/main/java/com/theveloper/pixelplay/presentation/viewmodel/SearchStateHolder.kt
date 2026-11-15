@@ -2,6 +2,7 @@ package com.theveloper.pixelplay.presentation.viewmodel
 
 import com.theveloper.pixelplay.data.gdstudio.GdStudioLibrary
 import com.theveloper.pixelplay.data.model.SearchFilterType
+import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.model.SearchHistoryItem
 import com.theveloper.pixelplay.data.model.SearchResultItem
 import com.theveloper.pixelplay.data.repository.MusicRepository
@@ -80,6 +81,10 @@ class SearchStateHolder @Inject constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     private val latestSearchRequestId = AtomicLong(0L)
+    @Volatile private var protectedOnlineQuery = ""
+    @Volatile private var protectedOnlineUntil = 0L
+    private var rememberedOnlineSongs: List<Song> = emptyList()
+    private var rememberedOnlineQuery: String = ""
 
     private var scope: CoroutineScope? = null
     private var searchJob: Job? = null
@@ -102,11 +107,17 @@ class SearchStateHolder @Inject constructor(
                     val normalizedQuery = request.query
 
                     if (normalizedQuery.isBlank()) {
+                        rememberedOnlineSongs = emptyList()
+                        rememberedOnlineQuery = ""
                         if (_searchResults.value.isNotEmpty()) {
                             _searchResults.value = persistentListOf()
                         }
                         _searchStatus.value = SearchStatus.Idle
                         return@collectLatest
+                    }
+                    if (normalizedQuery != rememberedOnlineQuery) {
+                        rememberedOnlineSongs = emptyList()
+                        rememberedOnlineQuery = ""
                     }
 
                     try {
@@ -142,7 +153,10 @@ class SearchStateHolder @Inject constructor(
                                 emptyList()
                             }
                             if (request.requestId != latestSearchRequestId.get()) return@coroutineScope
-                            _searchResults.value = local.toImmutableList()
+                            _searchResults.value = mergeOnlineSongs(
+                                local,
+                                keptOnlineSongs(normalizedQuery, currentFilter)
+                            )
                             if (onlineDeferred == null) {
                                 _searchStatus.value = SearchStatus.Ready
                                 return@coroutineScope
@@ -165,15 +179,9 @@ class SearchStateHolder @Inject constructor(
                                 return@coroutineScope
                             }
                             if (request.requestId != latestSearchRequestId.get()) return@coroutineScope
-                            if (online.isNotEmpty()) {
-                                val seen = local.mapNotNull { item ->
-                                    (item as? SearchResultItem.SongItem)?.song?.id
-                                }.toSet()
-                                val merged = local + online
-                                    .filter { it.id !in seen }
-                                    .map { SearchResultItem.SongItem(it) }
-                                _searchResults.value = merged.toImmutableList()
-                            }
+                            rememberedOnlineSongs = online
+                            rememberedOnlineQuery = normalizedQuery
+                            _searchResults.value = mergeOnlineSongs(local, online)
                             _searchStatus.value = SearchStatus.Ready
                         }
                     } catch (_: CancellationException) {
@@ -186,6 +194,23 @@ class SearchStateHolder @Inject constructor(
                     }
                 }
         }
+    }
+
+    private fun keptOnlineSongs(query: String, filter: SearchFilterType): List<Song> {
+        if (query != rememberedOnlineQuery) return emptyList()
+        if (filter != SearchFilterType.ALL && filter != SearchFilterType.SONGS) return emptyList()
+        return rememberedOnlineSongs
+    }
+
+    private fun mergeOnlineSongs(
+        local: List<SearchResultItem>,
+        online: List<Song>
+    ): ImmutableList<SearchResultItem> {
+        if (online.isEmpty()) return local.toImmutableList()
+        val seen = local.mapNotNull { item ->
+            (item as? SearchResultItem.SongItem)?.song?.id
+        }.toSet()
+        return (local + online.filter { it.id !in seen }.map { SearchResultItem.SongItem(it) }).toImmutableList()
     }
 
     fun updateSearchFilter(filterType: SearchFilterType) {
@@ -222,6 +247,17 @@ class SearchStateHolder @Inject constructor(
 
     fun performSearch(query: String, fetchOnline: Boolean = false) {
         val normalizedQuery = query.trim()
+        val now = System.currentTimeMillis()
+        if (!fetchOnline &&
+            normalizedQuery == protectedOnlineQuery &&
+            now < protectedOnlineUntil
+        ) {
+            return
+        }
+        if (fetchOnline && normalizedQuery.isNotBlank()) {
+            protectedOnlineQuery = normalizedQuery
+            protectedOnlineUntil = now + 1_500L
+        }
 
         val requestId = latestSearchRequestId.incrementAndGet()
 

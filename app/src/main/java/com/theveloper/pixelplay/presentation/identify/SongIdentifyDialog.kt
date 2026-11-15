@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.Button
@@ -43,6 +45,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -261,7 +266,6 @@ private fun IdentifyHistoryList(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onSearch("${item.title} ${item.artist}".trim()) }
                     .padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -271,7 +275,12 @@ private fun IdentifyHistoryList(
                     modifier = Modifier.size(56.dp),
                     shape = RoundedCornerShape(14.dp)
                 )
-                Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .weight(1f)
+                        .clickable { onSearch("${item.title} ${item.artist}".trim()) }
+                ) {
                     Text(
                         text = item.title,
                         style = MaterialTheme.typography.titleMedium,
@@ -292,6 +301,7 @@ private fun IdentifyHistoryList(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                CopySongButton(item.title, item.artist)
             }
         }
     }
@@ -330,6 +340,30 @@ private fun FoundCard(phase: IdentifyPhase.Found, onSearch: (String) -> Unit) {
         Spacer(Modifier.height(16.dp))
         Button(onClick = { onSearch("${song.title} ${song.artist}".trim()) }) {
             Text("用这个歌名去在线搜索")
+        }
+        Spacer(Modifier.height(8.dp))
+        CopySongButton(song.title, song.artist, showLabel = true)
+    }
+}
+
+@Composable
+private fun CopySongButton(title: String, artist: String, showLabel: Boolean = false) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val copy = {
+        val text = listOf(title, artist).filter { it.isNotBlank() }.joinToString(" ")
+        clipboard.setText(AnnotatedString(text))
+        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+    }
+    if (showLabel) {
+        FilledTonalButton(onClick = copy) {
+            Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("复制歌名")
+        }
+    } else {
+        IconButton(onClick = copy) {
+            Icon(Icons.Rounded.ContentCopy, contentDescription = "复制歌名")
         }
     }
 }

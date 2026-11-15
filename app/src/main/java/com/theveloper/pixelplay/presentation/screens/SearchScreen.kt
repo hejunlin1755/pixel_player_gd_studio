@@ -262,6 +262,13 @@ fun SearchScreen(
     }
 
     // Search debouncing is centralized in SearchStateHolder.
+    LaunchedEffect(playerViewModel.searchQuery) {
+        val incoming = playerViewModel.searchQuery
+        if (incoming != searchQuery) {
+            searchQuery = incoming
+        }
+    }
+
     LaunchedEffect(searchQuery, currentFilter) {
         playerViewModel.performSearch(searchQuery)
     }
