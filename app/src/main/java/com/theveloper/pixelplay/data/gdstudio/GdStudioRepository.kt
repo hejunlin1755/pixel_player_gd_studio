@@ -2,6 +2,8 @@ package com.theveloper.pixelplay.data.gdstudio
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -43,6 +45,9 @@ class GdStudioRepository @Inject constructor(
 
     private val gate = Mutex()
     private val requestTimes = ArrayDeque<Long>()
+    private val fallbackNotices = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val fallbackNotice = fallbackNotices.asSharedFlow()
+    private val fallbackNoticeAt = ConcurrentHashMap<String, Long>()
     private val coverCache = ConcurrentHashMap<String, String>()
     private val streamCache = ConcurrentHashMap<String, CachedStream>()
     @Volatile private var workingBase: String? = null
@@ -146,6 +151,7 @@ class GdStudioRepository @Inject constructor(
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
         }
+        announceFallback(query)
         return try {
             page.query(query)
         } catch (_: HumanCheckException) {
@@ -175,6 +181,20 @@ class GdStudioRepository @Inject constructor(
         }
         if (sawChallenge) throw HumanCheckException(GdStudioApi.SITE)
         throw last ?: GdStudioException("GD音乐台请求失败")
+    }
+
+    private fun announceFallback(query: Map<String, String>) {
+        val type = query["types"] ?: return
+        val message = when (type) {
+            "search" -> "正在改用网站页面获取列表"
+            "url" -> "正在改用网站页面获取下载地址"
+            else -> return
+        }
+        val now = System.currentTimeMillis()
+        val previous = fallbackNoticeAt[type] ?: 0L
+        if (now - previous < FALLBACK_NOTICE_MS) return
+        fallbackNoticeAt[type] = now
+        fallbackNotices.tryEmit(message)
     }
 
     private fun orderedEndpoints(): List<String> {
@@ -240,5 +260,6 @@ class GdStudioRepository @Inject constructor(
         private const val MAX_REQUESTS = 50
         private const val WINDOW_MS = 5 * 60 * 1000L
         private const val STREAM_CACHE_MS = 10 * 60 * 1000L
+        private const val FALLBACK_NOTICE_MS = 10_000L
     }
 }

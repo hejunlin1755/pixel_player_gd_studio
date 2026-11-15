@@ -889,6 +889,10 @@ class PlayerViewModel @Inject constructor(
             .onEach { msg: String -> _toastEvents.emit(msg) }
             .launchIn(viewModelScope)
 
+        gdStudioLibrary.fallbackNotice
+            .onEach { message -> _toastEvents.emit(message) }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             stablePlayerState
                 .map { it.currentSong?.id }

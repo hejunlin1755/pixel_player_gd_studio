@@ -37,6 +37,8 @@ class GdStudioLibrary @Inject constructor(
     private val musicDao: MusicDao,
     okHttpClient: OkHttpClient
 ) {
+    val fallbackNotice = repository.fallbackNotice
+
     private val downloadClient = okHttpClient.newBuilder()
         .readTimeout(2, TimeUnit.MINUTES)
         .callTimeout(3, TimeUnit.MINUTES)
