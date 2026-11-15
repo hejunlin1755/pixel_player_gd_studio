@@ -2,13 +2,14 @@ package com.theveloper.pixelplay.data.gdstudio
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
-import org.jaudiotagger.audio.AudioFileIO
-import org.jaudiotagger.tag.FieldKey
-import org.jaudiotagger.tag.images.AndroidArtwork
+import com.kyant.taglib.Picture
+import com.kyant.taglib.TagLib
 import com.theveloper.pixelplay.data.database.AlbumEntity
 import com.theveloper.pixelplay.data.database.ArtistEntity
 import com.theveloper.pixelplay.data.database.MusicDao
@@ -28,6 +29,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -212,16 +214,27 @@ class GdStudioLibrary @Inject constructor(
         val songId = playable.id.toLong()
 
         val stored = musicDao.getSongByIdOnce(songId)
-        val existingFile = stored?.filePath?.let(::File)
-            ?.takeIf { it.isFile && it.length() > 0L && isPublicMusic(it.absolutePath) }
-        if (existingFile != null && stored != null) {
-            if (!hasEmbeddedTitle(existingFile)) {
-                val cover = cacheCover(File(context.cacheDir, "gdstudio").apply { mkdirs() }, songId, ref.source, picIdOf(playable))
-                val lyrics = stored.lyrics?.takeIf { it.isNotBlank() }
-                    ?: runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
-                rewritePublished(stored.contentUriString, existingFile, playable, lyrics, cover)
+        val publishedUri = stored?.contentUriString?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?.takeIf { it.scheme == "content" && canRead(it) }
+        if (stored != null && publishedUri != null) {
+            val cover = cacheCover(File(context.cacheDir, "gdstudio").apply { mkdirs() }, songId, ref.source, picIdOf(playable))
+            val lyrics = stored.lyrics?.takeIf { it.isNotBlank() }
+                ?: runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
+            val durableCover = keepCover(songId, cover)
+            if (needsEmbeddedTags(publishedUri, lyrics)) {
+                writeTags(publishedUri, playable.title, playable.artist, playable.album, lyrics, durableCover ?: cover, force = true)
+                writeColumns(publishedUri, playable.title, playable.artist, playable.album)
             }
-            return@withContext stored.toSong()
+            val refreshed = stored.copy(
+                title = playable.title.ifBlank { stored.title },
+                artistName = playable.artist.ifBlank { stored.artistName },
+                albumName = playable.album.ifBlank { stored.albumName },
+                albumArtist = playable.artist.ifBlank { stored.albumArtist },
+                lyrics = lyrics ?: stored.lyrics,
+                albumArtUriString = durableCover?.let { Uri.fromFile(it).toString() } ?: stored.albumArtUriString
+            )
+            if (refreshed != stored) musicDao.insertSongs(listOf(refreshed))
+            return@withContext refreshed.toSong()
         }
         val privateCopy = musicDao.getSongByIdOnce(songId)?.filePath?.let(::File)
             ?.takeIf { it.isFile && it.length() > 0L && isLibraryFile(it.absolutePath) }
@@ -236,15 +249,16 @@ class GdStudioLibrary @Inject constructor(
         }
         val coverFile = cacheCover(File(context.cacheDir, "gdstudio").apply { mkdirs() }, songId, ref.source, picIdOf(playable))
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
-        embedTagsIfMissing(staged, playable, lyrics, coverFile)
-        val published = publishToMusic(staged, musicFileName(playable, staged.extension.ifBlank { "mp3" }), playable)
+        val durableCover = keepCover(songId, coverFile)
+        writeTags(staged, playable.title, playable.artist, playable.album, lyrics, durableCover ?: coverFile)
+        val published = publishToMusic(staged, musicFileName(playable, staged.extension.ifBlank { "mp3" }), playable, lyrics, durableCover ?: coverFile)
         if (staged.absolutePath != published.file.absolutePath) staged.delete()
 
-        val duration = readDuration(published.file)
+        val duration = readDuration(published.uri)
         saveSong(
             song = playable,
             audio = published.file,
-            cover = coverFile,
+            cover = durableCover ?: coverFile,
             lyrics = lyrics,
             duration = duration,
             contentUri = published.uri.toString(),
@@ -255,7 +269,13 @@ class GdStudioLibrary @Inject constructor(
 
     private data class PublishedSong(val uri: Uri, val file: File)
 
-    private fun publishToMusic(source: File, displayName: String, song: Song): PublishedSong {
+    private fun publishToMusic(
+        source: File,
+        displayName: String,
+        song: Song,
+        lyrics: String?,
+        cover: File?
+    ): PublishedSong {
         val resolver = context.contentResolver
         val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val values = ContentValues().apply {
@@ -263,17 +283,18 @@ class GdStudioLibrary @Inject constructor(
             put(MediaStore.Audio.Media.TITLE, song.title)
             put(MediaStore.Audio.Media.ARTIST, song.artist)
             put(MediaStore.Audio.Media.ALBUM, song.album)
+            put(MediaStore.Audio.Media.ALBUM_ARTIST, song.artist)
             put(MediaStore.Audio.Media.MIME_TYPE, mimeOf(source))
             put(MediaStore.Audio.Media.RELATIVE_PATH, "$MUSIC_FOLDER/")
+            put(MediaStore.Audio.Media.IS_MUSIC, 1)
             put(MediaStore.Audio.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection, values) ?: throw GdStudioException("无法保存到 Music 文件夹")
         resolver.openOutputStream(uri)?.use { output ->
             source.inputStream().use { input -> input.copyTo(output) }
         } ?: throw GdStudioException("无法保存到 Music 文件夹")
-        values.clear()
-        values.put(MediaStore.Audio.Media.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
+        writeTags(uri, song.title, song.artist, song.album, lyrics, cover)
+        writeColumns(uri, song.title, song.artist, song.album)
         val path = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
@@ -287,87 +308,202 @@ class GdStudioLibrary @Inject constructor(
         return "$safe.$extension"
     }
 
-    private fun hasEmbeddedTitle(file: File): Boolean {
+    suspend fun repairPublishedSongs() {
+        val rows = musicDao.getGdPublishedSongIds().mapNotNull { musicDao.getSongByIdOnce(it) }
+        rows.groupBy { it.filePath }.forEach { (path, group) ->
+            val uri = group.firstNotNullOfOrNull { row ->
+                runCatching { Uri.parse(row.contentUriString) }.getOrNull()
+                    ?.takeIf { it.scheme == "content" && canRead(it) }
+            } ?: return@forEach
+            val lyrics = group.firstNotNullOfOrNull { it.lyrics?.takeIf { text -> text.isNotBlank() } }
+            if (!needsEmbeddedTags(uri, lyrics)) return@forEach
+            val best = group.maxBy { metadataScore(it) }
+            val (fileTitle, fileArtist) = namesFromFile(File(path).name)
+            val title = best.title.takeUnless { blankMeta(it) } ?: fileTitle
+            val artist = best.artistName.takeUnless { blankMeta(it) } ?: fileArtist
+            val album = best.albumName.takeUnless { blankMeta(it) }.orEmpty()
+            val cover = group.firstNotNullOfOrNull { coverFileOf(it) }
+            val durableCover = keepCover(best.id, cover)
+            writeTags(uri, title, artist, album, lyrics, durableCover ?: cover, force = true)
+            writeColumns(uri, title, artist, album)
+            val artUri = durableCover?.let { Uri.fromFile(it).toString() }
+            group.forEach { row ->
+                val updated = row.copy(
+                    title = title.ifBlank { row.title },
+                    artistName = artist.ifBlank { row.artistName },
+                    albumName = album.ifBlank { row.albumName },
+                    albumArtist = artist.ifBlank { row.albumArtist },
+                    lyrics = lyrics ?: row.lyrics,
+                    albumArtUriString = artUri ?: row.albumArtUriString,
+                    artistsJson = if (artist.isBlank()) row.artistsJson else {
+                        """[{"id":${row.artistId},"name":${jsonString(artist)},"primary":true}]"""
+                    }
+                )
+                if (updated != row) musicDao.insertSongs(listOf(updated))
+            }
+        }
+    }
+
+    private fun canRead(uri: Uri): Boolean {
         return runCatching {
-            java.util.logging.Logger.getLogger("org.jaudiotagger").level = java.util.logging.Level.OFF
-            AudioFileIO.read(file).tag?.getFirst(FieldKey.TITLE).orEmpty().isNotBlank()
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize > 0L } ?: false
         }.getOrDefault(false)
     }
 
-    private fun embedTagsIfMissing(file: File, song: Song, lyrics: String?, cover: File?): Boolean {
-        return try {
-            java.util.logging.Logger.getLogger("org.jaudiotagger").level = java.util.logging.Level.OFF
-            val audioFile = AudioFileIO.read(file)
-            val tag = audioFile.tag ?: audioFile.createDefaultTag().also { audioFile.setTag(it) }
-            var changed = false
-            if (tag.getFirst(FieldKey.TITLE).isBlank() && song.title.isNotBlank()) {
-                tag.setField(FieldKey.TITLE, song.title)
-                changed = true
-            }
-            if (tag.getFirst(FieldKey.ARTIST).isBlank() && song.artist.isNotBlank()) {
-                tag.setField(FieldKey.ARTIST, song.artist)
-                tag.setField(FieldKey.ALBUM_ARTIST, song.artist)
-                changed = true
-            }
-            if (tag.getFirst(FieldKey.ALBUM).isBlank() && song.album.isNotBlank()) {
-                tag.setField(FieldKey.ALBUM, song.album)
-                changed = true
-            }
-            if (tag.getFirst(FieldKey.LYRICS).isBlank() && !lyrics.isNullOrBlank()) {
-                tag.setField(FieldKey.LYRICS, lyrics)
-                changed = true
-            }
-            if (tag.firstArtwork == null && cover != null && cover.isFile && cover.length() > 0L) {
-                val bytes = cover.readBytes()
-                val artwork = AndroidArtwork()
-                artwork.binaryData = bytes
-                artwork.mimeType = "image/jpeg"
-                artwork.pictureType = 3
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                artwork.width = options.outWidth
-                artwork.height = options.outHeight
-                tag.setField(artwork)
-                changed = true
-            }
-            if (changed) audioFile.commit()
-            changed
+    private fun needsEmbeddedTags(uri: Uri, lyrics: String?): Boolean {
+        val retriever = MediaMetadataRetriever()
+        val missingCore = try {
+            retriever.setDataSource(context, uri)
+            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+            val picture = retriever.embeddedPicture
+            blankMeta(artist) || blankMeta(title) || picture == null
         } catch (_: Exception) {
-            false
+            true
+        } finally {
+            runCatching { retriever.release() }
+        }
+        if (missingCore || lyrics.isNullOrBlank()) return missingCore
+        return embeddedLyricsMissing(uri)
+    }
+
+    private fun embeddedLyricsMissing(uri: Uri): Boolean {
+        return runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
+                TagLib.getMetadata(fd.detachFd())?.propertyMap?.get("LYRICS")?.firstOrNull().isNullOrBlank()
+            } ?: true
+        }.getOrDefault(true)
+    }
+
+    private fun writeColumns(uri: Uri, title: String, artist: String, album: String) {
+        val values = ContentValues().apply {
+            if (title.isNotBlank()) put(MediaStore.Audio.Media.TITLE, title)
+            if (artist.isNotBlank()) {
+                put(MediaStore.Audio.Media.ARTIST, artist)
+                put(MediaStore.Audio.Media.ALBUM_ARTIST, artist)
+            }
+            if (album.isNotBlank()) put(MediaStore.Audio.Media.ALBUM, album)
+            put(MediaStore.Audio.Media.IS_MUSIC, 1)
+            put(MediaStore.Audio.Media.IS_PENDING, 0)
+        }
+        runCatching { context.contentResolver.update(uri, values, null, null) }
+    }
+
+    private fun writeTags(
+        target: Uri,
+        title: String,
+        artist: String,
+        album: String,
+        lyrics: String?,
+        cover: File?,
+        force: Boolean = false
+    ) {
+        val descriptor = runCatching { context.contentResolver.openFileDescriptor(target, "rw") }.getOrNull() ?: return
+        writeTags(descriptor, title, artist, album, lyrics, cover, force)
+    }
+
+    private fun writeTags(
+        target: File,
+        title: String,
+        artist: String,
+        album: String,
+        lyrics: String?,
+        cover: File?,
+        force: Boolean = false
+    ) {
+        val descriptor = runCatching {
+            ParcelFileDescriptor.open(target, ParcelFileDescriptor.MODE_READ_WRITE)
+        }.getOrNull() ?: return
+        writeTags(descriptor, title, artist, album, lyrics, cover, force)
+    }
+
+    private fun writeTags(
+        descriptor: ParcelFileDescriptor,
+        title: String,
+        artist: String,
+        album: String,
+        lyrics: String?,
+        cover: File?,
+        force: Boolean
+    ) {
+        descriptor.use { fd ->
+            val existing = runCatching { TagLib.getMetadata(fd.dup().detachFd())?.propertyMap }.getOrNull()
+            val map = HashMap<String, Array<String>>()
+            existing?.forEach { (key, value) -> map[key] = value }
+            fun fill(key: String, value: String) {
+                val current = map[key]?.firstOrNull().orEmpty()
+                if (!blankMeta(value) && (force || blankMeta(current))) map[key] = arrayOf(value)
+            }
+            fill("TITLE", title)
+            fill("ARTIST", artist)
+            fill("ALBUMARTIST", artist)
+            fill("ALBUM", album)
+            fill("LYRICS", lyrics.orEmpty())
+            runCatching { TagLib.savePropertyMap(fd.dup().detachFd(), map) }
+            val jpeg = cover?.let { jpegBytes(it) } ?: return
+            runCatching {
+                TagLib.savePictures(
+                    fd.dup().detachFd(),
+                    arrayOf(
+                        Picture(
+                            data = jpeg,
+                            description = "Front Cover",
+                            pictureType = "Front Cover",
+                            mimeType = "image/jpeg"
+                        )
+                    )
+                )
+            }
         }
     }
 
-    private fun rewritePublished(contentUri: String, source: File, song: Song, lyrics: String?, cover: File?) {
-        val uri = runCatching { Uri.parse(contentUri) }.getOrNull() ?: return
-        val temp = File(context.cacheDir, "gdstudio").apply { mkdirs() }
-        val staged = File(temp, "retag-${source.name}")
-        val copied = runCatching {
-            val input = if (uri.scheme == "content") {
-                context.contentResolver.openInputStream(uri)
-            } else {
-                source.inputStream()
-            } ?: return
-            input.use { stream -> staged.outputStream().use { stream.copyTo(it) } }
-            true
-        }.getOrDefault(false)
-        if (!copied || staged.length() == 0L) {
-            staged.delete()
-            return
-        }
-        if (!embedTagsIfMissing(staged, song, lyrics, cover)) {
-            staged.delete()
-            return
-        }
-        if (uri.scheme == "content") {
-            runCatching {
-                context.contentResolver.openOutputStream(uri, "wt")?.use { output ->
-                    staged.inputStream().use { it.copyTo(output) }
-                }
-            }
-        } else {
-            runCatching { staged.copyTo(source, overwrite = true) }
-        }
-        staged.delete()
+    private fun jpegBytes(cover: File): ByteArray? {
+        val raw = runCatching { cover.readBytes() }.getOrNull() ?: return null
+        if (raw.size >= 2 && raw[0] == 0xFF.toByte() && raw[1] == 0xD8.toByte()) return raw
+        val bitmap = BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return null
+        val output = ByteArrayOutputStream()
+        val saved = bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)
+        bitmap.recycle()
+        return if (saved) output.toByteArray() else null
+    }
+
+    private fun keepCover(songId: Long, cover: File?): File? {
+        if (cover == null || !cover.isFile || cover.length() == 0L) return null
+        val destination = File(File(context.filesDir, "gdstudio-covers").apply { mkdirs() }, "$songId.jpg")
+        if (cover.absolutePath == destination.absolutePath) return destination
+        return runCatching {
+            cover.copyTo(destination, overwrite = true)
+            destination
+        }.getOrNull()
+    }
+
+    private fun coverFileOf(song: SongEntity): File? {
+        val stored = song.albumArtUriString?.takeIf { it.startsWith("file:") }?.let { Uri.parse(it).path }?.let(::File)
+        if (stored != null && stored.isFile && stored.length() > 0L) return stored
+        val cached = File(context.cacheDir, "gdstudio/${song.id}.jpg")
+        if (cached.isFile && cached.length() > 0L) return cached
+        val durable = File(context.filesDir, "gdstudio-covers/${song.id}.jpg")
+        return durable.takeIf { it.isFile && it.length() > 0L }
+    }
+
+    private fun namesFromFile(fileName: String): Pair<String, String> {
+        val parts = fileName.substringBeforeLast('.').split(" - ", limit = 2)
+        return parts.getOrElse(0) { "" }.trim() to parts.getOrElse(1) { "" }.trim()
+    }
+
+    private fun metadataScore(song: SongEntity): Int {
+        var score = 0
+        if (!blankMeta(song.artistName)) score += 4
+        if (!blankMeta(song.title)) score += 2
+        if (!song.lyrics.isNullOrBlank()) score += 1
+        if (!song.albumArtUriString.isNullOrBlank()) score += 1
+        return score
+    }
+
+    private fun blankMeta(value: String?): Boolean {
+        val text = value.orEmpty().trim().lowercase()
+        return text.isEmpty() || text == "<unknown>" || text == "unknown" ||
+            text == "unknown artist" || text == "unknown album" || text == "unknown title"
     }
 
     private suspend fun saveSong(
@@ -534,10 +670,18 @@ class GdStudioLibrary @Inject constructor(
         }
     }
 
-    private fun readDuration(file: File): Long {
+    private fun readDuration(file: File): Long = readDuration { retriever ->
+        retriever.setDataSource(file.absolutePath)
+    }
+
+    private fun readDuration(uri: Uri): Long = readDuration { retriever ->
+        retriever.setDataSource(context, uri)
+    }
+
+    private fun readDuration(open: (MediaMetadataRetriever) -> Unit): Long {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(file.absolutePath)
+            open(retriever)
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
         } catch (_: Exception) {
             0L

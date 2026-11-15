@@ -795,6 +795,9 @@ class PlayerViewModel @Inject constructor(
             }
         )
         themeStateHolder.initialize(viewModelScope)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { gdStudioLibrary.repairPublishedSongs() }
+        }
         playbackDispatchStateHolder.initialize(playbackDispatchCallbacks())
         mediaControllerSyncStateHolder.initialize(controllerSyncCallbacks())
 
