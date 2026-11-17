@@ -1,18 +1,16 @@
 package com.theveloper.pixelplay.data.gdstudio
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import android.webkit.CookieManager
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -22,7 +20,8 @@ import javax.inject.Singleton
 class GdStudioRepository @Inject constructor(
     okHttpClient: OkHttpClient,
     private val webGate: GdStudioWebGate,
-    private val page: GdStudioPage
+    private val page: GdStudioPage,
+    private val userPreferences: UserPreferencesRepository
 ) {
     private val client = okHttpClient.newBuilder()
         .addInterceptor { chain ->
@@ -43,8 +42,6 @@ class GdStudioRepository @Inject constructor(
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    private val gate = Mutex()
-    private val requestTimes = ArrayDeque<Long>()
     private val fallbackNotices = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val fallbackNotice = fallbackNotices.asSharedFlow()
     private val fallbackNoticeAt = ConcurrentHashMap<String, Long>()
@@ -74,7 +71,6 @@ class GdStudioRepository @Inject constructor(
                 "count" to count.coerceIn(1, 50).toString(),
                 "pages" to page.coerceAtLeast(1).toString()
             ),
-            essential = false
         )
         GdStudioApi.parseSearch(body)
     }
@@ -96,7 +92,6 @@ class GdStudioRepository @Inject constructor(
                     "id" to trackId,
                     "br" to br
                 ),
-                essential = true
             )
             val url = GdStudioApi.parseUrl(body)?.url
             if (!url.isNullOrBlank()) {
@@ -119,7 +114,6 @@ class GdStudioRepository @Inject constructor(
                 "id" to picId,
                 "size" to if (size == "500") "500" else "300"
             ),
-            essential = false
         )
         GdStudioApi.parsePic(body)?.also { remember(coverCache, cacheKey, it, 64) }
     }
@@ -133,30 +127,37 @@ class GdStudioRepository @Inject constructor(
                 "source" to stable,
                 "id" to lyricId
             ),
-            essential = false
         )
         GdStudioApi.parseLyrics(body)
     }
 
-    private suspend fun get(query: Map<String, String>, essential: Boolean): String {
-        val webFallback = query["types"] == "search" || query["types"] == "search_album" || query["types"] == "url"
+    private suspend fun get(query: Map<String, String>): String {
+        val mode = userPreferences.gdRouteModeFlow.first()
+        if (mode == "web") return fromPage(query)
+        val webFallback = mode != "api" && (
+            query["types"] == "search" || query["types"] == "search_album" || query["types"] == "url"
+        )
         try {
-            return getFromApi(query, essential)
+            return getFromApi(query)
         } catch (error: HumanCheckException) {
-            if (!webFallback) throw error
+            if (query["types"] !in setOf("search", "search_album", "url")) throw error
             webGate.awaitClearance()
             page.discard()
             try {
-                return getFromApi(query, essential)
+                return getFromApi(query)
             } catch (again: Exception) {
                 if (again is kotlinx.coroutines.CancellationException) throw again
+                if (!webFallback) throw again
             }
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            if (error.message == "请求太频繁，请稍后再试") throw error
             if (!webFallback) throw error
         }
         announceFallback(query)
+        return fromPage(query)
+    }
+
+    private suspend fun fromPage(query: Map<String, String>): String {
         return try {
             page.query(query)
         } catch (_: HumanCheckException) {
@@ -166,13 +167,10 @@ class GdStudioRepository @Inject constructor(
         }
     }
 
-    private suspend fun getFromApi(query: Map<String, String>, essential: Boolean): String {
+    private suspend fun getFromApi(query: Map<String, String>): String {
         var last: Exception? = null
         var sawChallenge = false
         for (base in orderedEndpoints()) {
-            if (!awaitSlot(essential)) {
-                throw GdStudioException("请求太频繁，请稍后再试")
-            }
             try {
                 val body = fetch(base, query)
                 workingBase = base
@@ -246,32 +244,9 @@ class GdStudioRepository @Inject constructor(
             body.contains("请完成以下操作")
     }
 
-    private suspend fun awaitSlot(essential: Boolean): Boolean {
-        val waitMs = gate.withLock {
-            val now = System.currentTimeMillis()
-            while (requestTimes.isNotEmpty() && now - requestTimes.first() >= WINDOW_MS) {
-                requestTimes.removeFirst()
-            }
-            if (requestTimes.size < MAX_REQUESTS || essential) {
-                if (requestTimes.size >= MAX_REQUESTS) {
-                    requestTimes.removeFirst()
-                }
-                requestTimes.addLast(now)
-                0L
-            } else {
-                -1L
-            }
-        }
-        if (waitMs == 0L) return true
-        delay(300)
-        return false
-    }
-
     private data class CachedStream(val url: String, val at: Long)
 
     companion object {
-        private const val MAX_REQUESTS = 50
-        private const val WINDOW_MS = 5 * 60 * 1000L
         private const val STREAM_CACHE_MS = 10 * 60 * 1000L
         private const val FALLBACK_NOTICE_MS = 10_000L
     }

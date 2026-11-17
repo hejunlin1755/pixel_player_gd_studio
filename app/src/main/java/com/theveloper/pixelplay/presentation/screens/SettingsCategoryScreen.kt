@@ -735,6 +735,21 @@ fun SettingsCategoryScreen(
                             }
                         }
                         SettingsCategory.PLAYBACK -> {
+                            val gdRouteMode by settingsViewModel.gdRouteMode.collectAsStateWithLifecycle()
+                            SettingsSubsection(title = "GD音乐台") {
+                                ThemeSelectorItem(
+                                    label = "获取方式",
+                                    description = "自动先走接口，失败再用网页",
+                                    options = mapOf(
+                                        "auto" to "自动",
+                                        "api" to "仅 API",
+                                        "web" to "仅网页"
+                                    ),
+                                    selectedKey = gdRouteMode,
+                                    onSelectionChanged = { settingsViewModel.setGdRouteMode(it) },
+                                    leadingIcon = { Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                            }
                             SettingsSubsection(title = stringResource(R.string.settings_background_playback_section)) {
                                 ThemeSelectorItem(
                                     label = stringResource(R.string.settings_keep_playing_title),

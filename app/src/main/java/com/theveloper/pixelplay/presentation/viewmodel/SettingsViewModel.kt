@@ -914,6 +914,15 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    val gdRouteMode = userPreferencesRepository.gdRouteModeFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "auto")
+
+    fun setGdRouteMode(mode: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.setGdRouteMode(mode)
+        }
+    }
+
     fun setAutoScanLrcFiles(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setAutoScanLrcFiles(enabled)

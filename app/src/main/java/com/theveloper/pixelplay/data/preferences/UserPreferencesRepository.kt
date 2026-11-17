@@ -211,6 +211,7 @@ class UserPreferencesRepository @Inject constructor(
         // Developer options
         val ALBUM_ART_QUALITY = stringPreferencesKey("album_art_quality")
         val GD_CACHE_QUALITY = stringPreferencesKey("gd_cache_quality")
+        val GD_ROUTE_MODE = stringPreferencesKey("gd_route_mode")
         val ALBUM_ART_CACHE_LIMIT_MB = intPreferencesKey("album_art_cache_limit_mb")
         val TAP_BACKGROUND_CLOSES_PLAYER = booleanPreferencesKey("tap_background_closes_player")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
@@ -1216,6 +1217,16 @@ suspend fun markDirectoryRulesVersionApplied(version: Int) {
         dataStore.edit { it[PreferencesKeys.GD_CACHE_QUALITY] = quality }
     }
 
+    val gdRouteModeFlow: Flow<String> =
+        pref { preferences ->
+            preferences[PreferencesKeys.GD_ROUTE_MODE]?.takeIf { it in GD_ROUTE_MODES } ?: "auto"
+        }
+
+    suspend fun setGdRouteMode(mode: String) {
+        if (mode !in GD_ROUTE_MODES) return
+        dataStore.edit { it[PreferencesKeys.GD_ROUTE_MODE] = mode }
+    }
+
     val albumArtCacheLimitMbFlow: Flow<Int> =
         pref { it[PreferencesKeys.ALBUM_ART_CACHE_LIMIT_MB] ?: DEFAULT_ALBUM_ART_CACHE_LIMIT_MB }
 
@@ -1369,6 +1380,7 @@ suspend fun markDirectoryRulesVersionApplied(version: Int) {
 
         const val DEFAULT_ALBUM_ART_CACHE_LIMIT_MB = 200
         val GD_CACHE_QUALITIES = setOf("128", "192", "320", "740", "999")
+        val GD_ROUTE_MODES = setOf("auto", "api", "web")
     }
 
     // ─── Private utilities ────────────────────────────────────────────────────
