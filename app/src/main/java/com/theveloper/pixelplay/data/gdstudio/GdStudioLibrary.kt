@@ -401,42 +401,6 @@ class GdStudioLibrary @Inject constructor(
         return true
     }
 
-    suspend fun repairPublishedSongs() {
-        val rows = musicDao.getGdPublishedSongIds().mapNotNull { musicDao.getSongByIdOnce(it) }
-        rows.groupBy { it.filePath }.forEach { (path, group) ->
-            val uri = group.firstNotNullOfOrNull { row ->
-                runCatching { Uri.parse(row.contentUriString) }.getOrNull()
-                    ?.takeIf { it.scheme == "content" && canRead(it) }
-            } ?: return@forEach
-            val lyrics = group.firstNotNullOfOrNull { it.lyrics?.takeIf { text -> text.isNotBlank() } }
-            if (!needsEmbeddedTags(uri, lyrics)) return@forEach
-            val best = group.maxBy { metadataScore(it) }
-            val (fileTitle, fileArtist) = namesFromFile(File(path).name)
-            val title = best.title.takeUnless { blankMeta(it) } ?: fileTitle
-            val artist = best.artistName.takeUnless { blankMeta(it) } ?: fileArtist
-            val album = best.albumName.takeUnless { blankMeta(it) }.orEmpty()
-            val cover = group.firstNotNullOfOrNull { coverFileOf(it) }
-            val durableCover = keepCover(best.id, cover)
-            writeTags(uri, title, artist, album, lyrics, durableCover ?: cover, force = true)
-            writeColumns(uri, title, artist, album)
-            val artUri = durableCover?.let { Uri.fromFile(it).toString() }
-            group.forEach { row ->
-                val updated = row.copy(
-                    title = title.ifBlank { row.title },
-                    artistName = artist.ifBlank { row.artistName },
-                    albumName = album.ifBlank { row.albumName },
-                    albumArtist = artist.ifBlank { row.albumArtist },
-                    lyrics = lyrics ?: row.lyrics,
-                    albumArtUriString = artUri ?: row.albumArtUriString,
-                    artistsJson = if (artist.isBlank()) row.artistsJson else {
-                        """[{"id":${row.artistId},"name":${jsonString(artist)},"primary":true}]"""
-                    }
-                )
-                if (updated != row) musicDao.insertSongs(listOf(updated))
-            }
-        }
-    }
-
     private fun canRead(uri: Uri): Boolean {
         return runCatching {
             context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize > 0L } ?: false
@@ -456,16 +420,7 @@ class GdStudioLibrary @Inject constructor(
         } finally {
             runCatching { retriever.release() }
         }
-        if (missingCore || lyrics.isNullOrBlank()) return missingCore
-        return embeddedLyricsMissing(uri)
-    }
-
-    private fun embeddedLyricsMissing(uri: Uri): Boolean {
-        return runCatching {
-            context.contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
-                TagLib.getMetadata(fd.detachFd())?.propertyMap?.get("LYRICS")?.firstOrNull().isNullOrBlank()
-            } ?: true
-        }.getOrDefault(true)
+        return missingCore || !lyrics.isNullOrBlank()
     }
 
     private fun writeColumns(uri: Uri, title: String, artist: String, album: String) {
@@ -568,29 +523,6 @@ class GdStudioLibrary @Inject constructor(
             cover.copyTo(destination, overwrite = true)
             destination
         }.getOrNull()
-    }
-
-    private fun coverFileOf(song: SongEntity): File? {
-        val stored = song.albumArtUriString?.takeIf { it.startsWith("file:") }?.let { Uri.parse(it).path }?.let(::File)
-        if (stored != null && stored.isFile && stored.length() > 0L) return stored
-        val cached = File(context.cacheDir, "gdstudio/${song.id}.jpg")
-        if (cached.isFile && cached.length() > 0L) return cached
-        val durable = File(context.filesDir, "gdstudio-covers/${song.id}.jpg")
-        return durable.takeIf { it.isFile && it.length() > 0L }
-    }
-
-    private fun namesFromFile(fileName: String): Pair<String, String> {
-        val parts = fileName.substringBeforeLast('.').split(" - ", limit = 2)
-        return parts.getOrElse(0) { "" }.trim() to parts.getOrElse(1) { "" }.trim()
-    }
-
-    private fun metadataScore(song: SongEntity): Int {
-        var score = 0
-        if (!blankMeta(song.artistName)) score += 4
-        if (!blankMeta(song.title)) score += 2
-        if (!song.lyrics.isNullOrBlank()) score += 1
-        if (!song.albumArtUriString.isNullOrBlank()) score += 1
-        return score
     }
 
     private fun blankMeta(value: String?): Boolean {

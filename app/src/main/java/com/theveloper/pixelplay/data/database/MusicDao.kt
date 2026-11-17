@@ -462,9 +462,6 @@ interface MusicDao {
     )
     suspend fun getSongByPath(path: String): SongEntity?
 
-    @Query("SELECT id FROM songs WHERE file_path LIKE '%/Music/GD音乐台/%' OR parent_directory_path LIKE '%GD音乐台%'")
-    suspend fun getGdPublishedSongIds(): List<Long>
-
     @Query("SELECT " + SONG_LIST_PROJECTION + """
         FROM songs
         WHERE id IN (:songIds)
