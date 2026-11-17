@@ -1210,7 +1210,9 @@ class DualPlayerEngine @Inject constructor(
         }
 
         if (resolved != null) {
-            resolvedUriCache.put(uriString, resolved)
+            if (uri.scheme != "gdstudio") {
+                resolvedUriCache.put(uriString, resolved)
+            }
             return@withContext resolved
         }
         uri

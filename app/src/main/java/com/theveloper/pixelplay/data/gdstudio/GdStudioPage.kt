@@ -17,6 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,9 +34,17 @@ class GdStudioPage @Inject constructor(
     private val lock = Mutex()
     private val bridge = PageBridge()
 
+    private val requestIds = AtomicLong()
+
     @Volatile private var webView: WebView? = null
     @Volatile private var pageReady = false
-    @Volatile private var delivery: ((String) -> Unit)? = null
+    @Volatile private var deliveryId = 0L
+    @Volatile private var delivery: ((Long, String) -> Unit)? = null
+
+    fun discard() {
+        pageReady = false
+        mainHandler.post { webView?.reload() }
+    }
 
     suspend fun query(params: Map<String, String>): String = lock.withLock {
         repeat(4) { attempt ->
@@ -95,26 +104,30 @@ class GdStudioPage @Inject constructor(
     }
 
     private fun ask(params: Map<String, String>): String {
+        val id = requestIds.incrementAndGet()
         val latch = CountDownLatch(1)
         val result = AtomicReference("")
-        delivery = { value ->
-            result.set(value)
-            latch.countDown()
+        deliveryId = id
+        delivery = { answerId, value ->
+            if (answerId == id) {
+                result.set(value)
+                latch.countDown()
+            }
         }
-        val script = requestScript(params)
+        val script = requestScript(id, params)
         mainHandler.post {
             val view = webView
             if (view == null) {
-                delivery?.invoke(NOT_READY)
+                delivery?.invoke(id, NOT_READY)
                 return@post
             }
             view.evaluateJavascript(script, null)
         }
         if (!latch.await(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            delivery = null
+            if (deliveryId == id) delivery = null
             throw GdStudioException("网页查询超时")
         }
-        delivery = null
+        if (deliveryId == id) delivery = null
         return result.get()
     }
 
@@ -159,14 +172,15 @@ class GdStudioPage @Inject constructor(
             body.contains("请完成以下操作")
     }
 
-    private fun requestScript(params: Map<String, String>): String {
+    private fun requestScript(requestId: Long, params: Map<String, String>): String {
         val quoted = JSONObject.quote(JSONObject(params).toString())
         return """
             (function(){
+              var requestId = $requestId;
               try {
                 var q = JSON.parse(__QUERY__);
                 if (typeof crc32 !== 'function' || typeof urlEncode !== 'function' || typeof sourceNode !== 'function' || typeof ${'$'} === 'undefined') {
-                  $BRIDGE.onResult('$NOT_READY');
+                  $BRIDGE.onResult(String(requestId), '$NOT_READY');
                   return;
                 }
                 sourceNode(String(q.source || 'netease'));
@@ -188,15 +202,15 @@ class GdStudioPage @Inject constructor(
                   data: data,
                   dataType: asJson,
                   success: function(payload) {
-                    $BRIDGE.onResult(typeof payload === 'string' ? payload : JSON.stringify(payload));
+                    $BRIDGE.onResult(String(requestId), typeof payload === 'string' ? payload : JSON.stringify(payload));
                   },
                   error: function(xhr) {
                     var text = xhr && xhr.responseText ? String(xhr.responseText).slice(0, 400) : '';
-                    $BRIDGE.onResult('$HTTP_MARK' + (xhr ? xhr.status : 0) + '__' + text);
+                    $BRIDGE.onResult(String(requestId), '$HTTP_MARK' + (xhr ? xhr.status : 0) + '__' + text);
                   }
                 });
               } catch (error) {
-                $BRIDGE.onResult('$ERR_MARK' + error);
+                $BRIDGE.onResult(String(requestId), '$ERR_MARK' + error);
               }
             })();
         """.trimIndent().replace("__QUERY__", quoted)
@@ -209,8 +223,10 @@ class GdStudioPage @Inject constructor(
 
     private inner class PageBridge {
         @JavascriptInterface
-        fun onResult(value: String?) {
-            delivery?.invoke(value.orEmpty())
+        fun onResult(requestId: String?, value: String?) {
+            val id = requestId?.toLongOrNull() ?: return
+            if (id != deliveryId) return
+            delivery?.invoke(id, value.orEmpty())
         }
     }
 

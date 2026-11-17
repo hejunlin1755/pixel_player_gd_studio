@@ -184,6 +184,7 @@ class GdStudioLibrary @Inject constructor(
             }
             created
         }
+        prunePlayCache(directory, audioFile)
         val coverFile = cacheCover(directory, songId, ref.source, picIdOf(playable))
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
         val duration = readDuration(audioFile)
@@ -254,6 +255,7 @@ class GdStudioLibrary @Inject constructor(
             val temp = File(context.cacheDir, "gdstudio").apply { mkdirs() }
             File(temp, "$songId-download${extensionOf(streamUrl, ref.br)}").also { download(streamUrl, it) }
         }
+        prunePlayCache(File(context.cacheDir, "gdstudio"), staged)
         val coverFile = fetchCover(songId, ref.source, picIdOf(playable), playable.albumArtUriString)
         val lyrics = runCatching { repository.lyrics(ref.source, ref.lyricId) }.getOrNull()
         val durableCover = keepCover(songId, coverFile)
@@ -301,9 +303,14 @@ class GdStudioLibrary @Inject constructor(
             put(MediaStore.Audio.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection, values) ?: throw GdStudioException("无法保存到 Music 文件夹")
-        resolver.openOutputStream(uri)?.use { output ->
-            source.inputStream().use { input -> input.copyTo(output) }
-        } ?: throw GdStudioException("无法保存到 Music 文件夹")
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                source.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw GdStudioException("无法保存到 Music 文件夹")
+        } catch (error: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
         writeTags(uri, song.title, song.artist, song.album, lyrics, cover)
         writeColumns(uri, song.title, song.artist, song.album)
         val path = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
@@ -600,6 +607,18 @@ class GdStudioLibrary @Inject constructor(
             onSuccess = { file.takeIf { it.isFile && it.length() > 0L } },
             onFailure = { null }
         )
+    }
+
+    private fun prunePlayCache(directory: File, keep: File) {
+        val files = directory.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() }?.toMutableList() ?: return
+        var total = files.sumOf { it.length() }
+        val limit = 400L * 1024 * 1024
+        while (files.size > 8 && (files.size > 30 || total > limit)) {
+            val oldest = files.removeAt(0)
+            if (oldest.absolutePath == keep.absolutePath) continue
+            total -= oldest.length()
+            oldest.delete()
+        }
     }
 
     private fun findCachedAudio(songId: Long, br: String): File? {

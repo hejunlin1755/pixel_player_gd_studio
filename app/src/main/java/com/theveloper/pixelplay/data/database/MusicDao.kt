@@ -229,6 +229,8 @@ interface MusicDao {
         AND content_uri_string NOT LIKE 'gdstudio:%'
         AND IFNULL(parent_directory_path, '') != '/Cloud/GD'
         AND IFNULL(parent_directory_path, '') NOT LIKE '%/gdstudio'
+        AND IFNULL(file_path, '') NOT LIKE '%/Music/GD音乐台/%'
+        AND IFNULL(parent_directory_path, '') NOT LIKE '%/Music/GD音乐台%'
     """)
     suspend fun getAllMediaStoreSongIds(): List<Long>
 

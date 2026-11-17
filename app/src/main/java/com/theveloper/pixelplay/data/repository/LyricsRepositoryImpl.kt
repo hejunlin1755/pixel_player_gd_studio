@@ -469,7 +469,7 @@ class LyricsRepositoryImpl @Inject constructor(
      */
     private suspend fun fetchLyricsFromAPI(song: Song): Lyrics? = withContext(Dispatchers.IO) {
         GdStudioApi.parseTrackUri(song.contentUriString)?.let { ref ->
-            val raw = gdStudioRepository.lyrics(ref.source, ref.lyricId)
+            val raw = runCatching { gdStudioRepository.lyrics(ref.source, ref.lyricId) }.getOrNull()
             if (!raw.isNullOrBlank()) {
                 val parsed = LyricsUtils.parseLyrics(raw).copy(areFromRemote = true)
                 if (parsed.isValid()) return@withContext parsed

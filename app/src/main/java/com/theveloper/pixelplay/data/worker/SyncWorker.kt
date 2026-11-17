@@ -895,6 +895,7 @@ constructor(
                     while (cursor.moveToNext()) {
                         try {
                             val data = cursor.getString(dataCol) ?: continue
+                            if (data.contains("/Music/GD音乐台/")) continue
                             val lastSlash = data.lastIndexOf('/')
                             if (lastSlash > 0) {
                                 val normalizedParent = data.substring(0, lastSlash)
@@ -1186,6 +1187,7 @@ constructor(
             val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
             while (cursor.moveToNext()) {
                 val data = cursor.getString(dataCol)
+                if (data != null && data.contains("/Music/GD音乐台/")) continue
                 if (data != null) {
                     val parentPath = File(data).parent
                     if (parentPath != null && directoryResolver.isBlocked(File(parentPath).absolutePath)) {

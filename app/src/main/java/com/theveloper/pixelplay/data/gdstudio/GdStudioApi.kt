@@ -103,7 +103,7 @@ object GdStudioApi {
 
     fun parseUrl(body: String): StreamLink? {
         val json = body.trim().takeIf { it.startsWith("{") }?.let(::JSONObject) ?: return null
-        val url = json.optString("url").takeIf { it.startsWith("https://") } ?: return null
+        val url = json.optString("url").takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return null
         return StreamLink(
             url = url,
             br = normalizeQuality(json.optString("br").takeIf { it.isNotBlank() }),
@@ -113,7 +113,7 @@ object GdStudioApi {
 
     fun parsePic(body: String): String? {
         val json = body.trim().takeIf { it.startsWith("{") }?.let(::JSONObject) ?: return null
-        return json.optString("url").takeIf { it.startsWith("https://") }
+        return json.optString("url").takeIf { it.startsWith("https://") || it.startsWith("http://") }
     }
 
     fun parseLyrics(body: String): String? {
@@ -164,10 +164,11 @@ data class Track(
     val source: String
 ) {
     fun toSong(br: String, coverUrl: String? = null): Song {
-        val uri = GdStudioApi.trackUri(source, id, lyricId, br)
+        val uri = GdStudioApi.trackUri(source, id, lyricId, br) +
+            picId.takeIf { it.isNotBlank() }?.let { "&pic=${android.net.Uri.encode(it)}" }.orEmpty()
         val artistLabel = artists.joinToString(", ").ifBlank { "未知歌手" }
         return Song(
-            id = "gdstudio:$source:$id",
+            id = GdStudioLibrary.stableId("song:$source:$id").toString(),
             title = name,
             artist = artistLabel,
             artistId = -1L,

@@ -38,7 +38,7 @@ class GdStudioViewModel @Inject constructor(
     val state: StateFlow<GdStudioUiState> = _state.asStateFlow()
 
     private var searchJob: Job? = null
-    private var coverJob: Job? = null
+    private val coverJobs = mutableListOf<Job>()
 
     fun setQuery(value: String) {
         _state.update { it.copy(query = value) }
@@ -59,7 +59,7 @@ class GdStudioViewModel @Inject constructor(
             current.copy(
                 quality = quality,
                 songs = current.tracks.map { track ->
-                    track.toSong(quality, current.songs.firstOrNull { it.id == "gdstudio:${track.source}:${track.id}" }?.albumArtUriString)
+                    track.toSong(quality, current.songs.firstOrNull { it.id == track.toSong(quality).id }?.albumArtUriString)
                 }
             )
         }
@@ -68,7 +68,8 @@ class GdStudioViewModel @Inject constructor(
     fun search() {
         val snapshot = _state.value
         searchJob?.cancel()
-        coverJob?.cancel()
+        coverJobs.toList().forEach { it.cancel() }
+        coverJobs.clear()
         searchJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, page = 1, endReached = false) }
             loadPage(snapshot.query, snapshot.source, snapshot.albumMode, snapshot.quality, page = 1, append = false)
@@ -111,7 +112,7 @@ class GdStudioViewModel @Inject constructor(
                     endReached = found.isEmpty(),
                     tracks = tracks,
                     songs = tracks.map { track ->
-                        val id = "gdstudio:${track.source}:${track.id}"
+                        val id = track.toSong(quality).id
                         track.toSong(quality, previousArt[id])
                     },
                     error = if (!append && found.isEmpty()) "没有找到曲目" else null
@@ -128,15 +129,14 @@ class GdStudioViewModel @Inject constructor(
     }
 
     private fun loadCovers(tracks: List<Track>) {
-        coverJob?.cancel()
-        coverJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             tracks.filter { it.picId.isNotBlank() }.forEach { track ->
                 val cover = runCatching { repository.coverUrl(track.source, track.picId) }.getOrNull()
                     ?: return@forEach
                 _state.update { current ->
                     current.copy(
                         songs = current.songs.map { song ->
-                            if (song.id == "gdstudio:${track.source}:${track.id}") {
+                            if (song.id == track.toSong(_state.value.quality).id) {
                                 song.copy(albumArtUriString = cover)
                             } else {
                                 song
@@ -146,5 +146,6 @@ class GdStudioViewModel @Inject constructor(
                 }
             }
         }
+        coverJobs += job
     }
 }

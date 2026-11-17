@@ -100,7 +100,7 @@ class GdStudioRepository @Inject constructor(
             )
             val url = GdStudioApi.parseUrl(body)?.url
             if (!url.isNullOrBlank()) {
-                streamCache[cacheKey] = CachedStream(url, System.currentTimeMillis())
+                remember(streamCache, cacheKey, CachedStream(url, System.currentTimeMillis()), 32)
                 return@withContext url
             }
         }
@@ -121,7 +121,7 @@ class GdStudioRepository @Inject constructor(
             ),
             essential = false
         )
-        GdStudioApi.parsePic(body)?.also { coverCache[cacheKey] = it }
+        GdStudioApi.parsePic(body)?.also { remember(coverCache, cacheKey, it, 64) }
     }
 
     suspend fun lyrics(source: String, lyricId: String): String? = withContext(Dispatchers.IO) {
@@ -133,16 +133,19 @@ class GdStudioRepository @Inject constructor(
                 "source" to stable,
                 "id" to lyricId
             ),
-            essential = true
+            essential = false
         )
         GdStudioApi.parseLyrics(body)
     }
 
     private suspend fun get(query: Map<String, String>, essential: Boolean): String {
+        val webFallback = query["types"] == "search" || query["types"] == "search_album" || query["types"] == "url"
         try {
             return getFromApi(query, essential)
         } catch (error: HumanCheckException) {
+            if (!webFallback) throw error
             webGate.awaitClearance()
+            page.discard()
             try {
                 return getFromApi(query, essential)
             } catch (again: Exception) {
@@ -150,12 +153,15 @@ class GdStudioRepository @Inject constructor(
             }
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
+            if (error.message == "请求太频繁，请稍后再试") throw error
+            if (!webFallback) throw error
         }
         announceFallback(query)
         return try {
             page.query(query)
         } catch (_: HumanCheckException) {
             webGate.awaitClearance()
+            page.discard()
             page.query(query)
         }
     }
@@ -195,6 +201,13 @@ class GdStudioRepository @Inject constructor(
         if (now - previous < FALLBACK_NOTICE_MS) return
         fallbackNoticeAt[type] = now
         fallbackNotices.tryEmit(message)
+    }
+
+    private fun <V> remember(cache: ConcurrentHashMap<String, V>, key: String, value: V, limit: Int) {
+        if (cache.size >= limit) {
+            cache.keys.firstOrNull()?.let { cache.remove(it) }
+        }
+        cache[key] = value
     }
 
     private fun orderedEndpoints(): List<String> {

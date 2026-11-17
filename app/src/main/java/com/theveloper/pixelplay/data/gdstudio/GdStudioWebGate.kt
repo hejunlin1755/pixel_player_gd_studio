@@ -17,9 +17,16 @@ class GdStudioWebGate @Inject constructor() {
     private val lock = Mutex()
     private val _prompt = MutableStateFlow<Prompt?>(null)
     val prompt: StateFlow<Prompt?> = _prompt.asStateFlow()
-    private var result: CompletableDeferred<Unit>? = null
+    @Volatile private var result: CompletableDeferred<Unit>? = null
+    @Volatile private var clearedAt = 0L
 
-    suspend fun awaitClearance() = lock.withLock {
+    suspend fun awaitClearance() {
+        if (System.currentTimeMillis() - clearedAt < CLEAR_WINDOW_MS) return
+        lock.withLock { showPrompt() }
+    }
+
+    private suspend fun showPrompt() {
+        if (System.currentTimeMillis() - clearedAt < CLEAR_WINDOW_MS) return
         val deferred = CompletableDeferred<Unit>()
         result = deferred
         _prompt.value = Prompt(GdStudioApi.SITE, System.nanoTime())
@@ -34,6 +41,7 @@ class GdStudioWebGate @Inject constructor() {
     }
 
     fun finished() {
+        clearedAt = System.currentTimeMillis()
         val waiter = result ?: return
         if (!waiter.isCompleted) waiter.complete(Unit)
     }
@@ -43,5 +51,9 @@ class GdStudioWebGate @Inject constructor() {
         if (!waiter.isCompleted) {
             waiter.completeExceptionally(GdStudioException("人机验证已取消"))
         }
+    }
+
+    companion object {
+        private const val CLEAR_WINDOW_MS = 15_000L
     }
 }
